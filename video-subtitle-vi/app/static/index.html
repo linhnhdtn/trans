@@ -283,6 +283,20 @@ input[type="text"] { padding: 9px 12px; border: 1px solid var(--line); border-ra
       <small>Cỡ chữ, che phụ đề gốc, logo được ghi nhớ cho lúc xuất video in cứng (tự động hoặc bấm xuất sau).</small>
     </div>
 
+    <div class="field">
+      <label for="up-voice">Giọng đọc AI (lồng tiếng)</label>
+      <div class="row">
+        <select id="up-voice" aria-label="Giọng đọc AI"><option value="">Không lồng tiếng</option></select>
+        <select id="up-voice-rate" aria-label="Tốc độ đọc" class="hidden">
+          <option value="-15%">Đọc chậm</option>
+          <option value="+0%" selected>Tốc độ thường</option>
+          <option value="+15%">Đọc nhanh</option>
+        </select>
+        <button type="button" id="up-voice-play" class="btn hidden">▶ Nghe thử</button>
+      </div>
+      <small>Đọc bản dịch tiếng Việt theo thời gian phụ đề, tiếng gốc giữ nhỏ lại. Áp dụng khi xuất video.</small>
+    </div>
+
     <button id="start" class="btn primary" disabled>Tạo phụ đề</button>
     <p id="upload-error" class="error"></p>
    </div>
@@ -371,6 +385,13 @@ input[type="text"] { padding: 9px 12px; border: 1px solid var(--line); border-ra
           </select>
           <label class="check"><input id="brand-on" type="checkbox"> Thêm logo + thanh tiêu đề</label>
           <input id="brand" type="text" value="Truyen Ki Bi Douyin" placeholder="Chữ trên thanh tiêu đề" aria-label="Chữ trên thanh tiêu đề" class="hidden">
+          <select id="voice" aria-label="Giọng đọc AI"><option value="">Không lồng tiếng</option></select>
+        <select id="voice-rate" aria-label="Tốc độ đọc" class="hidden">
+          <option value="-15%">Đọc chậm</option>
+          <option value="+0%" selected>Tốc độ thường</option>
+          <option value="+15%">Đọc nhanh</option>
+        </select>
+        <button type="button" id="voice-play" class="btn hidden">▶ Nghe thử</button>
           <button id="render-hard" class="btn primary">Xuất video in cứng</button>
           <button id="render-soft" class="btn">Xuất video nhúng phụ đề</button>
         </div>
@@ -439,6 +460,8 @@ $("start").addEventListener("click", () => {
   fd.append("font_size", $("up-font-size").value);
   fd.append("cover", $("up-cover").value);
   fd.append("brand", $("up-brand-on").checked ? $("up-brand").value : "");
+  fd.append("voice", $("up-voice").value);
+  fd.append("voice_rate", $("up-voice-rate").value);
 
   show("progress");
   $("p-file").textContent = selectedFile.name;
@@ -514,6 +537,11 @@ function openEditor() {
     if (job.brand) $("brand").value = job.brand;
     $("brand").classList.toggle("hidden", !job.brand);
     updateBrand();
+  }
+  if ("voice" in job) {
+    $("voice").value = job.voice || "";
+    $("voice-rate").value = job.voice_rate || "+0%";
+    toggleVoice("");
   }
   renderCues();
 }
@@ -614,12 +642,37 @@ $("save").addEventListener("click", async () => {
   }
 });
 
+// ---------- Giọng đọc AI ----------
+function toggleVoice(p) {
+  const on = !!$(`${p}voice`).value;
+  $(`${p}voice-rate`).classList.toggle("hidden", !on);
+  $(`${p}voice-play`).classList.toggle("hidden", !on);
+}
+let previewAudio;
+for (const p of ["up-", ""]) {
+  $(`${p}voice`).addEventListener("change", () => toggleVoice(p));
+  $(`${p}voice-play`).addEventListener("click", () => {
+    previewAudio?.pause();
+    const q = new URLSearchParams({ voice: $(`${p}voice`).value, rate: $(`${p}voice-rate`).value });
+    previewAudio = new Audio(`/api/tts/preview?${q}`);
+    previewAudio.play().catch(() => alert("Không phát được giọng mẫu, kiểm tra kết nối mạng của máy chủ."));
+  });
+}
+fetch("/api/voices").then((r) => r.json()).then((list) => {
+  for (const p of ["up-", ""]) {
+    const sel = $(`${p}voice`);
+    for (const v of list) sel.add(new Option(v.label, v.key));
+    if (p === "" && job?.voice) { sel.value = job.voice; toggleVoice(""); }
+  }
+}).catch(() => {});
+
 // ---------- Render ----------
 async function startRender(mode) {
   if (dirty.size && !confirm("Có thay đổi chưa lưu. Lưu trước rồi mới xuất để video dùng bản mới nhất. Vẫn xuất?")) return;
   const r = await fetch(`/api/jobs/${jobId}/render`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode, font_size: Number($("font-size").value), cover: $("cover-on").value, brand: $("brand-on").checked ? $("brand").value : "" }),
+    body: JSON.stringify({ mode, font_size: Number($("font-size").value), cover: $("cover-on").value, brand: $("brand-on").checked ? $("brand").value : "",
+      voice: $("voice").value, voice_rate: $("voice-rate").value }),
   });
   if (!r.ok) return alert(safeJson(await r.text()).detail || "Không xuất được video");
   job.render_status = "rendering";
@@ -635,7 +688,7 @@ function updateRender() {
   $("render-soft").disabled = busy;
   const st = $("render-status");
   st.className = job.render_status === "error" ? "error" : "muted";
-  st.textContent = busy ? "Đang xuất video, có thể mất vài phút với video dài."
+  st.textContent = busy ? (job.render_step || "Đang xuất video") + ", có thể mất vài phút với video dài."
     : job.render_status === "error" ? "Xuất video thất bại: " + job.render_error : "";
   const links = $("render-links");
   links.innerHTML = "";
