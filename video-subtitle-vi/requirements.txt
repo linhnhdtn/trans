@@ -7,3 +7,4 @@ requests==2.32.3
 pydantic>=2.9
 rapidocr_onnxruntime==1.4.4
 yt-dlp>=2026.10.21
+edge-tts>=7.0
