@@ -1,0 +1,6 @@
+.env
+data/
+models/
+ollama/
+__pycache__/
+*.pyc

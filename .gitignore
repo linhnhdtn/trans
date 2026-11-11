@@ -1,0 +1,10 @@
+# Bí mật, dữ liệu, model (nặng / riêng tư)
+.env
+**/data/
+**/models/
+**/ollama/
+__pycache__/
+*.pyc
+# Bản code cũ đóng gói và file tạm của công cụ test trình duyệt
+loi-viet.zip
+.playwright-mcp/

@@ -1,0 +1,839 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lời Việt – Phụ đề tiếng Việt tự động</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=Noto+Sans:ital,wght@0,500;1,700&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #EEF1F6; --surface: #FFFFFF; --ink: #1C2740; --muted: #5B6680;
+  --line: #D5DBE6; --accent: #0E7A73; --accent-ink: #FFFFFF;
+  --cue: #FFE27A; --cue-ink: #1C2740; --danger: #B3261E;
+  --radius-lg: 14px; --radius-sm: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #141A26; --surface: #1C2433; --ink: #E6EAF2; --muted: #9AA4B8;
+    --line: #2E384A; --accent: #3CC2B6; --accent-ink: #0B1F1D;
+    --cue: #4A3F12; --cue-ink: #FFE27A; --danger: #FF8A80;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 400 15px/1.55 "Be Vietnam Pro", "Segoe UI", system-ui, sans-serif;
+}
+header {
+  display: flex; align-items: baseline; gap: 14px;
+  padding: 18px clamp(16px, 4vw, 40px); border-bottom: 1px solid var(--line);
+}
+header h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+header h1 a { color: inherit; text-decoration: none; }
+header h1 a:hover { color: var(--accent); }
+.topbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.topbar .btn { padding: 7px 14px; }
+header p { margin: 0; color: var(--muted); font-size: 14px; }
+.tabs { display: flex; gap: 4px; margin-left: auto; align-self: center; }
+.tabs a {
+  padding: 7px 14px; border-radius: 99px; color: var(--muted); font-weight: 600; font-size: 14px; text-decoration: none;
+}
+.tabs a:hover { color: var(--ink); }
+.tabs a[aria-current="page"] { background: var(--accent); color: var(--accent-ink); }
+.dl-row { display: flex; gap: 10px; }
+.upload .dl-row .btn.primary { margin-top: 0; width: auto; padding: 10px 24px; }
+.dl-row input {
+  flex: 1; min-width: 0; padding: 12px 14px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+.dl-result { margin-top: 22px; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.dl-result video { display: block; width: 100%; max-height: 60vh; background: #000; border-radius: var(--radius-sm); }
+.dl-result h3 { margin: 12px 0 2px; font-size: 16px; overflow-wrap: anywhere; }
+.dl-result .actions { margin-top: 12px; }
+@media (max-width: 640px) { header { flex-wrap: wrap; } .tabs { margin-left: 0; width: 100%; } }
+main { padding: clamp(16px, 4vw, 40px); max-width: 1320px; margin: 0 auto; }
+button, select, textarea, input { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* Upload */
+.upload { max-width: 640px; }
+.upload h2 { font-size: 30px; line-height: 1.2; margin: 8px 0 10px; letter-spacing: -0.02em; }
+.upload > p { color: var(--muted); margin: 0 0 28px; max-width: 54ch; }
+.drop {
+  display: grid; place-items: center; text-align: center; gap: 6px;
+  min-height: 190px; padding: 24px; cursor: pointer;
+  border: 2px dashed var(--line); border-radius: var(--radius-lg); background: var(--surface);
+}
+.drop.over, .drop:hover { border-color: var(--accent); }
+.drop strong { font-size: 17px; }
+.drop span { color: var(--muted); font-size: 14px; }
+.field { margin-top: 18px; display: grid; gap: 6px; }
+.field label { font-weight: 600; font-size: 14px; }
+.field small { color: var(--muted); }
+select, textarea {
+  width: 100%; padding: 10px 12px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+textarea { resize: vertical; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px 18px; border-radius: var(--radius-sm); border: 1px solid var(--line);
+  background: var(--surface); cursor: pointer; font-weight: 600; text-decoration: none;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.upload .btn.primary { margin-top: 22px; width: 100%; padding: 13px; }
+
+/* Progress */
+.progress-wrap { max-width: 640px; }
+.progress-wrap h2 { font-size: 22px; margin: 0 0 4px; }
+.bar { height: 10px; background: var(--line); border-radius: 99px; overflow: hidden; margin: 18px 0 8px; }
+.bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s ease; }
+.muted { color: var(--muted); }
+.error { color: var(--danger); white-space: pre-wrap; }
+
+/* Editor */
+.editor { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+.stage { position: sticky; top: 16px; }
+.screen { position: relative; background: #000; border-radius: var(--radius-lg); overflow: hidden; }
+.screen video { display: block; width: 100%; max-height: 62vh; background: #000; }
+.caption {
+  position: absolute; left: 50%; bottom: 9.7%; transform: translateX(-50%);
+  max-width: 92%; text-align: center; white-space: pre-line; pointer-events: none;
+  font-weight: 500; font-size: 16px; line-height: 1.2; color: #fff;
+  text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 2px #000;
+}
+/* Khớp COVER_BOX trong pipeline.py */
+.cover { position: absolute; left: 15%; top: 81%; width: 70%; height: 11%;
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); pointer-events: none; }
+/* Tô đen: phụ đề Việt nằm giữa dải đen như video xuất ra */
+.cover.black ~ .caption { bottom: 9%; transform: translate(-50%, 50%); font-family: "Noto Sans", sans-serif; }
+.cover.black { left: 0; width: 100%; top: 82%; height: 18%; background: #000; backdrop-filter: none; }
+input[type="text"] { padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); min-width: 220px; }
+/* Xem trước thanh tiêu đề + logo, khớp make_brand_overlay trong pipeline.py (--b = cao thanh, --w = rộng video) */
+.pv-brand { position: absolute; left: 0; top: 0; width: 100%; height: var(--b); background: #1c1c1c; pointer-events: none;
+  font: italic 700 calc(var(--b) * .72)/var(--b) "Noto Sans", sans-serif; white-space: nowrap; }
+.pv-brand::before { content: ""; position: absolute; inset: 0; background: #8B0A14;
+  clip-path: polygon(0 0, calc(50% + var(--b) / 2) 0, calc(50% - var(--b) / 2) 100%, 0 100%); }
+.pv-brand span { position: absolute; top: 0; }
+.pv-brand .l { right: calc(50% + var(--b) * .6); color: #111; }
+.pv-brand .r { left: calc(50% + var(--b) * .6); color: #c81824; }
+.pv-logo { position: absolute; width: calc(var(--w) * .1); right: calc(var(--w) * .012);
+  top: calc(var(--w) * .0775); pointer-events: none; }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 14px 0; font-size: 14px; color: var(--muted); }
+.meta b { color: var(--ink); font-weight: 600; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.export { margin-top: 18px; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.export h3 { margin: 0 0 4px; font-size: 16px; }
+.export p { margin: 0 0 12px; font-size: 14px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.export select { width: auto; }
+
+.list-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.list-head h2 { margin: 0; font-size: 18px; }
+.cues { display: grid; gap: 8px; max-height: calc(100vh - 160px); overflow-y: auto; padding-right: 4px; }
+.cue {
+  display: grid; grid-template-columns: 74px 1fr; gap: 4px 12px;
+  padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+.cue.active { background: var(--cue); border-color: transparent; }
+.cue.active .src, .cue.active .time { color: var(--cue-ink); }
+.time {
+  grid-row: span 2; background: none; border: 0; padding: 2px 0; text-align: left;
+  color: var(--accent); font-weight: 600; font-size: 13px; cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.src { margin: 0; font-size: 13px; color: var(--muted); }
+.cue textarea {
+  border: 1px solid transparent; background: transparent; padding: 4px 6px; margin-left: -6px;
+  font-weight: 500; min-height: 34px; resize: vertical;
+}
+.cue textarea:hover { border-color: var(--line); }
+.cue textarea:focus { border-color: var(--accent); background: var(--surface); color: var(--ink); }
+.cue.dirty { box-shadow: inset 3px 0 0 var(--accent); }
+.hidden { display: none !important; }
+
+/* Trang chủ: form trái, lịch sử phải */
+.home { display: grid; grid-template-columns: minmax(0, 560px) minmax(0, 1fr); gap: 48px; align-items: start; }
+.history h3 { font-size: 17px; margin: 8px 0 14px; }
+.history ul {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 22px 16px;
+}
+.thumb {
+  position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; padding: 0; border: 0;
+  border-radius: 12px; overflow: hidden; background: #000; cursor: pointer;
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .2s ease; }
+.thumb:hover img { transform: scale(1.03); }
+.thumb .dur {
+  position: absolute; right: 8px; bottom: 8px; padding: 1px 6px; border-radius: 4px;
+  background: rgba(0, 0, 0, .78); color: #fff; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.card-title {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  margin-top: 10px; font-weight: 600; line-height: 1.35; color: inherit; text-decoration: none;
+}
+.card-title:hover { color: var(--accent); }
+.card-sub { margin-top: 2px; font-size: 13px; color: var(--muted); }
+.card-sub .tag { font-weight: 600; color: var(--accent); }
+.card-sub .tag.err { color: var(--danger); }
+
+/* Popup xem video */
+.player {
+  width: min(960px, calc(100vw - 32px)); padding: 0; border: 0; border-radius: var(--radius-lg);
+  background: var(--surface); color: var(--ink);
+}
+.player::backdrop { background: rgba(0, 0, 0, .7); }
+.player-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.player-head b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player video { display: block; width: 100%; max-height: 75vh; background: #000; }
+
+@media (max-width: 900px) { .home { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .thumb img { transition: none; } }
+
+@media (max-width: 900px) {
+  .editor { grid-template-columns: 1fr; }
+  .stage { position: static; }
+  .cues { max-height: none; }
+}
+@media (prefers-reduced-motion: reduce) { .bar > div { transition: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="/" data-nav title="Về trang chủ">Lời Việt</a></h1>
+  <p>Nghe giọng nói trong video và tạo phụ đề tiếng Việt</p>
+  <nav class="tabs" aria-label="Chức năng">
+    <a id="tab-translate" href="/" data-nav>Dịch video</a>
+    <a id="tab-download" href="/download" data-nav>Tải video</a>
+  </nav>
+</header>
+
+<main>
+  <!-- Bước 1: Upload -->
+  <section id="view-upload" class="home">
+   <div class="upload">
+    <h2>Tạo phụ đề tiếng Việt cho video của bạn</h2>
+    <p>Tải video lên, hệ thống sẽ nhận dạng lời nói, dịch sang tiếng Việt và cho bạn chỉnh sửa trước khi xuất video.</p>
+
+    <label id="drop" class="drop" tabindex="0">
+      <input id="file" type="file" accept="video/*,.mkv" hidden>
+      <strong id="drop-title">Kéo video vào đây hoặc bấm để chọn</strong>
+      <span id="drop-sub">MP4, MOV, MKV, WEBM, AVI</span>
+    </label>
+
+    <div class="field">
+      <label for="lang">Ngôn ngữ trong video</label>
+      <select id="lang">
+        <option value="">Tự nhận diện</option>
+        <option value="en">Tiếng Anh</option>
+        <option value="zh">Tiếng Trung</option>
+        <option value="ja">Tiếng Nhật</option>
+        <option value="ko">Tiếng Hàn</option>
+        <option value="th">Tiếng Thái</option>
+        <option value="fr">Tiếng Pháp</option>
+        <option value="de">Tiếng Đức</option>
+        <option value="es">Tiếng Tây Ban Nha</option>
+        <option value="ru">Tiếng Nga</option>
+        <option value="id">Tiếng Indonesia</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="ocr">Nguồn văn bản</label>
+      <select id="ocr">
+        <option value="">Chỉ nghe giọng nói</option>
+        <option value="1">Nghe giọng nói + đọc chữ có sẵn trên hình</option>
+      </select>
+      <small>Chọn đọc chữ nếu video đã có phụ đề in sẵn (ví dụ phụ đề tiếng Trung): dịch chuẩn hơn, xử lý lâu hơn.</small>
+    </div>
+
+    <div class="field">
+      <label for="glossary">Thuật ngữ cần giữ đúng (không bắt buộc)</label>
+      <textarea id="glossary" rows="3" placeholder="Mỗi dòng một cặp, ví dụ:&#10;checkout = thanh toán&#10;Magento = Magento"></textarea>
+      <small>Dùng cho tên thương hiệu, tên người, thuật ngữ chuyên ngành.</small>
+    </div>
+
+    <div class="field">
+      <label for="auto-render">Xuất video</label>
+      <select id="auto-render">
+        <option value="">Chỉ tạo phụ đề, tôi chỉnh sửa rồi xuất sau</option>
+        <option value="hard">Tự xuất video in cứng phụ đề</option>
+        <option value="soft">Tự xuất video nhúng phụ đề</option>
+      </select>
+      <div id="auto-hard" class="row" style="margin-top:8px">
+        <select id="up-font-size" aria-label="Cỡ chữ phụ đề">
+          <option value="11">Chữ nhỏ</option>
+          <option value="13" selected>Chữ vừa</option>
+          <option value="16">Chữ lớn</option>
+        </select>
+        <select id="up-cover" aria-label="Phụ đề gốc">
+          <option value="">Giữ phụ đề gốc</option>
+          <option value="blur">Làm mờ phụ đề gốc</option>
+          <option value="black" selected>Tô đen dải phụ đề gốc</option>
+        </select>
+        <label class="check"><input id="up-brand-on" type="checkbox"> Thêm logo + thanh tiêu đề</label>
+        <input id="up-brand" type="text" value="Truyen Ki Bi Douyin" placeholder="Chữ trên thanh tiêu đề" aria-label="Chữ trên thanh tiêu đề" class="hidden">
+      </div>
+      <small>Cỡ chữ, che phụ đề gốc, logo được ghi nhớ cho lúc xuất video in cứng (tự động hoặc bấm xuất sau).</small>
+    </div>
+
+    <button id="start" class="btn primary" disabled>Tạo phụ đề</button>
+    <p id="upload-error" class="error"></p>
+   </div>
+
+    <aside id="history" class="history hidden">
+      <h3>Video đã tạo</h3>
+      <ul id="history-list"></ul>
+    </aside>
+  </section>
+
+  <dialog id="player" class="player" aria-label="Xem video">
+    <div class="player-head">
+      <b id="player-title"></b>
+      <a id="player-edit" class="btn" href="/" data-nav>Mở chỉnh sửa</a>
+      <button id="player-close" class="btn" aria-label="Đóng">✕</button>
+    </div>
+    <video id="player-video" controls playsinline></video>
+  </dialog>
+
+  <!-- Tải video từ TikTok / Douyin / Facebook / YouTube -->
+  <section id="view-download" class="upload hidden">
+    <h2>Tải video TikTok, Douyin, Facebook, YouTube</h2>
+    <p>Dán link video (hoặc cả đoạn chia sẻ từ app), hệ thống tải bản chất lượng tốt nhất về máy.</p>
+    <form id="dl-form" class="dl-row">
+      <input id="dl-url" type="text" inputmode="url" autocomplete="off" required
+             placeholder="https://www.tiktok.com/@user/video/..." aria-label="Link video">
+      <button id="dl-go" class="btn primary">Tải</button>
+    </form>
+    <p id="dl-status" class="muted"></p>
+    <div id="dl-result" class="dl-result hidden">
+      <video id="dl-video" controls playsinline preload="metadata"></video>
+      <h3 id="dl-title"></h3>
+      <div id="dl-sub" class="muted"></div>
+      <div class="actions">
+        <a id="dl-save" class="btn primary" href="#">Lưu về máy</a>
+        <button id="dl-translate" class="btn">Dịch video này</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Bước 2: Tiến trình -->
+  <section id="view-progress" class="progress-wrap hidden">
+    <h2 id="p-file">Đang xử lý</h2>
+    <p id="p-step" class="muted">Đang tải lên</p>
+    <div class="bar"><div id="p-bar"></div></div>
+    <p id="p-pct" class="muted">0%</p>
+    <p id="p-error" class="error"></p>
+    <button id="p-new" class="btn hidden">Thử video khác</button>
+  </section>
+
+  <!-- Bước 3: Chỉnh sửa và xuất -->
+  <section id="view-editor" class="editor hidden">
+    <div class="stage">
+      <nav class="topbar">
+        <button id="back" class="btn">← Quay lại</button>
+        <a class="btn" href="/" data-nav>Trang chủ</a>
+      </nav>
+      <div id="screen" class="screen">
+        <video id="video" controls preload="metadata" playsinline></video>
+        <div id="cover" class="cover hidden"></div>
+        <div id="caption" class="caption"></div>
+        <div id="pv-brand" class="pv-brand hidden"><span id="pv-l" class="l"></span><span id="pv-r" class="r"></span></div>
+        <img id="pv-logo" class="pv-logo hidden" src="/brand_logo.png" alt="" onerror="this.remove()">
+      </div>
+      <div class="meta">
+        <span>Video: <b id="m-file"></b></span>
+        <span>Ngôn ngữ gốc: <b id="m-lang"></b></span>
+        <span><b id="m-count"></b> đoạn phụ đề</span>
+      </div>
+      <div class="actions">
+        <a id="dl-srt" class="btn" href="#">Tải file SRT</a>
+      </div>
+      <div class="export">
+        <h3>Xuất video có phụ đề</h3>
+        <p class="muted">In cứng: phụ đề luôn hiển thị, hợp với Facebook, TikTok. Nhúng: nhanh hơn, người xem bật tắt được.</p>
+        <div class="row">
+          <select id="font-size" aria-label="Cỡ chữ phụ đề">
+            <option value="11">Chữ nhỏ</option>
+            <option value="13" selected>Chữ vừa</option>
+            <option value="16">Chữ lớn</option>
+          </select>
+          <select id="cover-on" aria-label="Phụ đề gốc">
+          <option value="">Giữ phụ đề gốc</option>
+          <option value="blur">Làm mờ phụ đề gốc</option>
+          <option value="black" selected>Tô đen dải phụ đề gốc</option>
+          </select>
+          <label class="check"><input id="brand-on" type="checkbox"> Thêm logo + thanh tiêu đề</label>
+          <input id="brand" type="text" value="Truyen Ki Bi Douyin" placeholder="Chữ trên thanh tiêu đề" aria-label="Chữ trên thanh tiêu đề" class="hidden">
+          <button id="render-hard" class="btn primary">Xuất video in cứng</button>
+          <button id="render-soft" class="btn">Xuất video nhúng phụ đề</button>
+        </div>
+        <p id="render-status" class="muted" style="margin:12px 0 0"></p>
+        <div class="row" id="render-links" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="list-head">
+        <h2>Phụ đề tiếng Việt</h2>
+        <button id="save" class="btn primary" disabled>Lưu thay đổi</button>
+      </div>
+      <div id="cues" class="cues"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const LANGS = { en: "Tiếng Anh", zh: "Tiếng Trung", ja: "Tiếng Nhật", ko: "Tiếng Hàn", th: "Tiếng Thái",
+  fr: "Tiếng Pháp", de: "Tiếng Đức", es: "Tiếng Tây Ban Nha", ru: "Tiếng Nga", id: "Tiếng Indonesia", vi: "Tiếng Việt" };
+let jobId = null, job = null, pollTimer = null, selectedFile = null;
+const dirty = new Map();
+
+function show(view) {
+  for (const v of ["upload", "progress", "editor", "download"]) $("view-" + v).classList.toggle("hidden", v !== view);
+  const [on, off] = view === "download" ? ["tab-download", "tab-translate"] : ["tab-translate", "tab-download"];
+  $(on).setAttribute("aria-current", "page");
+  $(off).removeAttribute("aria-current");
+}
+function fmt(sec) {
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+// ---------- Upload ----------
+const drop = $("drop");
+function pickFile(f) {
+  if (!f) return;
+  selectedFile = f;
+  $("drop-title").textContent = f.name;
+  $("drop-sub").textContent = `${(f.size / 1048576).toFixed(1)} MB – bấm để đổi video`;
+  $("start").disabled = false;
+}
+$("file").addEventListener("change", (e) => pickFile(e.target.files[0]));
+drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
+["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => pickFile(e.dataTransfer.files[0]));
+
+$("auto-render").addEventListener("change", (e) => $("auto-hard").classList.toggle("hidden", e.target.value === "soft"));
+
+// Ô chữ thanh tiêu đề chỉ hiện khi tích "Thêm logo + thanh tiêu đề"
+for (const p of ["up-", ""]) $(`${p}brand-on`).addEventListener("change", (e) => $(`${p}brand`).classList.toggle("hidden", !e.target.checked));
+
+$("start").addEventListener("click", () => {
+  if (!selectedFile) return;
+  $("upload-error").textContent = "";
+  const fd = new FormData();
+  fd.append("file", selectedFile);
+  fd.append("source_lang", $("lang").value);
+  fd.append("glossary", $("glossary").value);
+  fd.append("ocr", $("ocr").value);
+  fd.append("auto_render", $("auto-render").value);
+  fd.append("font_size", $("up-font-size").value);
+  fd.append("cover", $("up-cover").value);
+  fd.append("brand", $("up-brand-on").checked ? $("up-brand").value : "");
+
+  show("progress");
+  $("p-file").textContent = selectedFile.name;
+  $("p-step").textContent = "Đang tải video lên";
+  $("p-error").textContent = "";
+  $("p-new").classList.add("hidden");
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/jobs");
+  xhr.upload.onprogress = (e) => { if (e.lengthComputable) setBar(e.loaded / e.total * 0.02); };
+  xhr.onload = () => {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      jobId = JSON.parse(xhr.responseText).id;
+      history.pushState({ app: true }, "", `/jobs/${jobId}`);
+      poll();
+    } else {
+      show("upload");
+      $("upload-error").textContent = (safeJson(xhr.responseText).detail) || "Tải lên thất bại. Kiểm tra kết nối rồi thử lại.";
+    }
+  };
+  xhr.onerror = () => { show("upload"); $("upload-error").textContent = "Không kết nối được máy chủ."; };
+  xhr.send(fd);
+});
+function safeJson(t) { try { return JSON.parse(t); } catch { return {}; } }
+function setBar(p) {
+  $("p-bar").style.width = `${Math.round(p * 100)}%`;
+  $("p-pct").textContent = `${Math.round(p * 100)}%`;
+}
+
+// ---------- Poll ----------
+async function poll() {
+  clearTimeout(pollTimer);
+  try {
+    const r = await fetch(`/api/jobs/${jobId}`);
+    if (!r.ok) { history.replaceState(null, "", "/"); return reset(); }
+    job = await r.json();
+  } catch { pollTimer = setTimeout(poll, 3000); return; }
+
+  if (job.status === "ready") {
+    if ($("view-editor").classList.contains("hidden")) openEditor();
+    updateRender();
+    if (job.render_status === "rendering") pollTimer = setTimeout(poll, 2000);
+    return;
+  }
+  show("progress");
+  $("p-file").textContent = job.filename;
+  $("p-step").textContent = job.step;
+  setBar(job.progress || 0);
+  if (job.status === "error") {
+    $("p-error").textContent = job.error;
+    $("p-new").classList.remove("hidden");
+    return;
+  }
+  pollTimer = setTimeout(poll, 1500);
+}
+
+// ---------- Editor ----------
+function openEditor() {
+  show("editor");
+  dirty.clear();
+  $("save").disabled = true;
+  const v = $("video");
+  v.src = `/api/jobs/${jobId}/files/video`;
+  $("m-file").textContent = job.filename;
+  document.title = `${job.filename} – Lời Việt`;
+  $("m-lang").textContent = LANGS[job.detected_lang] || job.detected_lang;
+  $("m-count").textContent = job.segments.length;
+  $("dl-srt").href = `/api/jobs/${jobId}/files/srt`;
+  if (job.font_size) $("font-size").value = job.font_size;
+  if ("cover" in job) {  // lựa chọn lúc tải lên (cả khi chỉ tạo phụ đề)
+    $("cover-on").value = job.cover === true ? "blur" : job.cover || "";
+    $("brand-on").checked = !!job.brand;
+    if (job.brand) $("brand").value = job.brand;
+    $("brand").classList.toggle("hidden", !job.brand);
+    updateBrand();
+  }
+  renderCues();
+}
+
+function renderCues() {
+  const box = $("cues");
+  box.innerHTML = "";
+  for (const s of job.segments) {
+    const row = document.createElement("div");
+    row.className = "cue";
+    row.dataset.id = s.id;
+
+    const t = document.createElement("button");
+    t.className = "time";
+    t.textContent = fmt(s.start);
+    t.title = "Phát từ đoạn này";
+    t.addEventListener("click", () => { $("video").currentTime = s.start + 0.01; $("video").play(); });
+
+    const src = document.createElement("p");
+    src.className = "src";
+    src.textContent = s.ocr ? `${s.src}  ·  Trên hình: ${s.ocr}` : s.src;
+
+    const ta = document.createElement("textarea");
+    ta.rows = 1;
+    ta.value = s.vi;
+    ta.setAttribute("aria-label", `Phụ đề tại ${fmt(s.start)}`);
+    ta.addEventListener("input", () => {
+      s.vi = ta.value;
+      dirty.set(s.id, ta.value);
+      row.classList.add("dirty");
+      $("save").disabled = false;
+      updateCaption(true);
+    });
+
+    row.append(t, src, ta);
+    box.append(row);
+  }
+}
+
+let activeId = null;
+function updateBrand() {
+  const text = $("brand-on").checked ? $("brand").value.trim().toUpperCase() : "";
+  const words = text.split(/\s+/);
+  const w = $("video").clientWidth;
+  $("screen").style.setProperty("--w", `${w}px`);
+  $("screen").style.setProperty("--b", `${Math.max(24, w * 0.045)}px`);
+  $("pv-l").textContent = words.length > 1 ? words.slice(0, -1).join(" ") : text;
+  $("pv-r").textContent = words.length > 1 ? words.at(-1) : "";
+  $("pv-brand").classList.toggle("hidden", !text);
+  $("pv-logo")?.classList.toggle("hidden", !text);
+}
+for (const id of ["brand-on", "brand"]) $(id).addEventListener("input", updateBrand);
+
+function updateCaption(force) {
+  if (!job?.segments) return;
+  if (force) updateBrand();
+  const now = $("video").currentTime;
+  const s = job.segments.find((x) => now >= x.start && now <= x.end);
+  const id = s ? s.id : null;
+  if (id === activeId && !force) return;
+  activeId = id;
+  $("caption").textContent = s ? s.vi : "";
+  $("cover").classList.toggle("hidden", !$("cover-on").value);
+  $("cover").classList.toggle("black", $("cover-on").value === "black");
+  $("caption").style.fontSize = `${$("video").clientHeight * Number($("font-size").value) / 288}px`;
+  document.querySelectorAll(".cue.active").forEach((el) => el.classList.remove("active"));
+  if (s) {
+    const el = document.querySelector(`.cue[data-id="${s.id}"]`);
+    if (el) {
+      el.classList.add("active");
+      if (!$("video").paused && !el.contains(document.activeElement)) el.scrollIntoView({ block: "nearest" });
+    }
+  }
+}
+$("video").addEventListener("timeupdate", () => updateCaption(false));
+$("video").addEventListener("seeked", () => updateCaption(true));
+$("video").addEventListener("loadedmetadata", () => updateCaption(true));
+$("font-size").addEventListener("change", () => updateCaption(true));
+window.addEventListener("resize", () => updateCaption(true));
+$("cover-on").addEventListener("change", () => updateCaption(true));
+
+$("save").addEventListener("click", async () => {
+  $("save").disabled = true;
+  $("save").textContent = "Đang lưu";
+  const segments = [...dirty].map(([id, vi]) => ({ id, vi }));
+  const r = await fetch(`/api/jobs/${jobId}/segments`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ segments }),
+  });
+  $("save").textContent = "Lưu thay đổi";
+  if (r.ok) {
+    dirty.clear();
+    document.querySelectorAll(".cue.dirty").forEach((el) => el.classList.remove("dirty"));
+    job.outputs = {};
+    updateRender();
+  } else {
+    $("save").disabled = false;
+    alert("Lưu thất bại: " + (safeJson(await r.text()).detail || r.status));
+  }
+});
+
+// ---------- Render ----------
+async function startRender(mode) {
+  if (dirty.size && !confirm("Có thay đổi chưa lưu. Lưu trước rồi mới xuất để video dùng bản mới nhất. Vẫn xuất?")) return;
+  const r = await fetch(`/api/jobs/${jobId}/render`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode, font_size: Number($("font-size").value), cover: $("cover-on").value, brand: $("brand-on").checked ? $("brand").value : "" }),
+  });
+  if (!r.ok) return alert(safeJson(await r.text()).detail || "Không xuất được video");
+  job.render_status = "rendering";
+  updateRender();
+  poll();
+}
+$("render-hard").addEventListener("click", () => startRender("hard"));
+$("render-soft").addEventListener("click", () => startRender("soft"));
+
+function updateRender() {
+  const busy = job.render_status === "rendering";
+  $("render-hard").disabled = busy;
+  $("render-soft").disabled = busy;
+  const st = $("render-status");
+  st.className = job.render_status === "error" ? "error" : "muted";
+  st.textContent = busy ? "Đang xuất video, có thể mất vài phút với video dài."
+    : job.render_status === "error" ? "Xuất video thất bại: " + job.render_error : "";
+  const links = $("render-links");
+  links.innerHTML = "";
+  const outs = job.outputs || {};
+  if (outs.hard) links.append(link("hard", "Tải video in cứng"));
+  if (outs.soft) links.append(link("soft", "Tải video nhúng phụ đề"));
+}
+function link(kind, text) {
+  const a = document.createElement("a");
+  a.className = "btn";
+  a.href = `/api/jobs/${jobId}/files/${kind}`;
+  a.textContent = text;
+  return a;
+}
+
+// ---------- Lịch sử ----------
+async function loadHistory() {
+  let jobs = [];
+  try { const r = await fetch("/api/jobs"); if (r.ok) jobs = await r.json(); } catch {}
+  $("history").classList.toggle("hidden", !jobs.length);
+  const ul = $("history-list");
+  ul.innerHTML = "";
+  for (const j of jobs) {
+    const li = document.createElement("li");
+
+    const btn = document.createElement("button");
+    btn.className = "thumb";
+    btn.setAttribute("aria-label", `Xem video ${j.filename}`);
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = "";
+    img.src = `/api/jobs/${j.id}/files/thumb`;
+    btn.append(img);
+    if (j.duration) {
+      const dur = document.createElement("span");
+      dur.className = "dur";
+      dur.textContent = fmt(j.duration);
+      btn.append(dur);
+    }
+    btn.addEventListener("click", () => openPlayer(j));
+
+    const title = document.createElement("a");
+    title.className = "card-title";
+    title.href = `/jobs/${j.id}`;
+    title.dataset.nav = "";
+    title.title = j.filename;
+    title.textContent = j.filename;
+
+    const sub = document.createElement("div");
+    sub.className = "card-sub";
+    const tag = document.createElement("span");
+    tag.className = "tag" + (j.status === "error" ? " err" : "");
+    tag.textContent = j.status === "error" ? "Lỗi"
+      : j.status !== "ready" ? `Đang xử lý ${Math.round((j.progress || 0) * 100)}%`
+      : j.outputs?.hard ? "Đã xuất video" : "Có phụ đề";
+    sub.append(tag, " · " + [LANGS[j.detected_lang], new Date(j.created_at * 1000).toLocaleDateString("vi-VN")]
+      .filter(Boolean).join(" · "));
+
+    li.append(btn, title, sub);
+    ul.append(li);
+  }
+}
+
+// Popup: ưu tiên video in cứng, nếu chưa có thì video gốc + phụ đề VTT của trình duyệt
+function openPlayer(j) {
+  const v = $("player-video");
+  v.innerHTML = "";
+  if (j.outputs?.hard) {
+    v.src = `/api/jobs/${j.id}/files/hard`;
+  } else {
+    v.src = `/api/jobs/${j.id}/files/video`;
+    if (j.status === "ready") {
+      const tr = document.createElement("track");
+      Object.assign(tr, { kind: "subtitles", srclang: "vi", label: "Tiếng Việt", default: true,
+        src: `/api/jobs/${j.id}/files/vtt` });
+      v.append(tr);
+    }
+  }
+  $("player-title").textContent = j.filename;
+  $("player-edit").href = `/jobs/${j.id}`;
+  $("player").showModal();
+  v.play().catch(() => {});
+}
+function closePlayer() {
+  const v = $("player-video");
+  v.pause();
+  v.removeAttribute("src");
+  v.innerHTML = "";
+  v.load();
+}
+$("player").addEventListener("close", closePlayer);
+$("player-close").addEventListener("click", () => $("player").close());
+$("player-edit").addEventListener("click", () => $("player").close());
+$("player").addEventListener("click", (e) => { if (e.target === $("player")) $("player").close(); });
+// ---------- Tải video ----------
+let dlItem = null;
+$("dl-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const raw = $("dl-url").value.trim();
+  const url = (raw.match(/https?:\/\/[^\s，。]+/) || [raw])[0];  // lấy link trong đoạn chia sẻ Douyin/TikTok
+  $("dl-go").disabled = true;
+  $("dl-result").classList.add("hidden");
+  $("dl-status").className = "muted";
+  $("dl-status").textContent = "Đang tải video, chờ chút nhé…";
+  try {
+    const r = await fetch("/api/downloads", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }),
+    });
+    const data = safeJson(await r.text());
+    if (!r.ok) throw new Error(data.detail || `Lỗi ${r.status}`);
+    dlItem = data;
+    const src = `/api/downloads/${data.id}/file`;
+    $("dl-video").src = src;
+    $("dl-save").href = src;
+    $("dl-title").textContent = data.title;
+    $("dl-sub").textContent = [data.uploader, data.duration && fmt(data.duration)].filter(Boolean).join(" · ");
+    $("dl-status").textContent = "";
+    $("dl-result").classList.remove("hidden");
+  } catch (err) {
+    $("dl-status").className = "error";
+    $("dl-status").textContent = err.message === "Failed to fetch" ? "Không kết nối được máy chủ." : err.message;
+  } finally {
+    $("dl-go").disabled = false;
+  }
+});
+
+// Chuyển video vừa tải sang tab Dịch, chọn sẵn file
+$("dl-translate").addEventListener("click", async () => {
+  if (!dlItem) return;
+  const btn = $("dl-translate");
+  btn.disabled = true;
+  btn.textContent = "Đang chuẩn bị…";
+  try {
+    const blob = await (await fetch(`/api/downloads/${dlItem.id}/file`)).blob();
+    const name = dlItem.title.replace(/[\\/:*?"<>|\s]+/g, " ").slice(0, 80).replace(/^[ .]+|[ .]+$/g, "") + dlItem.ext;
+    $("dl-video").pause();
+    go("/");
+    pickFile(new File([blob], name, { type: blob.type || "video/mp4" }));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Dịch video này";
+  }
+});
+
+// ---------- Điều hướng: / = trang chủ, /jobs/<id> = chỉnh sửa ----------
+const JOB_PATH = /^\/jobs\/([0-9a-f]{32})\/?$/;
+const leaveOk = () => !dirty.size || confirm("Bỏ các thay đổi chưa lưu?");
+function go(path) {
+  if (path === location.pathname || !leaveOk()) return;
+  dirty.clear();
+  history.pushState({ app: true }, "", path);
+  route();
+}
+function route() {
+  if (location.pathname === "/download") {
+    clearTimeout(pollTimer);
+    jobId = null;
+    $("video").removeAttribute("src");
+    document.title = "Tải video – Lời Việt";
+    return show("download");
+  }
+  const m = location.pathname.match(JOB_PATH);
+  if (!m) return reset();
+  if (m[1] !== jobId) { jobId = m[1]; $("view-editor").classList.add("hidden"); poll(); }
+}
+window.addEventListener("popstate", () => {
+  if (dirty.size && !leaveOk()) return history.pushState({ app: true }, "", `/jobs/${jobId}`);
+  dirty.clear();
+  route();
+});
+// Link nội bộ (data-nav) đổi trang không tải lại; Ctrl/Cmd+click vẫn mở tab mới
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("a[data-nav]");
+  if (!a || e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;
+  e.preventDefault();
+  go(a.getAttribute("href"));
+});
+
+function reset() {
+  clearTimeout(pollTimer);
+  jobId = null; job = null; selectedFile = null;
+  document.title = "Lời Việt – Phụ đề tiếng Việt tự động";
+  $("file").value = "";
+  $("drop-title").textContent = "Kéo video vào đây hoặc bấm để chọn";
+  $("drop-sub").textContent = "MP4, MOV, MKV, WEBM, AVI";
+  $("start").disabled = true;
+  $("video").removeAttribute("src");
+  show("upload");
+  loadHistory();
+}
+$("back").addEventListener("click", () => history.state?.app ? history.back() : go("/"));
+$("p-new").addEventListener("click", () => go("/"));
+window.addEventListener("beforeunload", (e) => { if (dirty.size) e.preventDefault(); });
+
+// Link cũ dạng /#<id> chuyển sang /jobs/<id>
+const h = location.hash.slice(1);
+if (/^[0-9a-f]{32}$/.test(h)) history.replaceState(null, "", `/jobs/${h}`);
+route();
+</script>
+</body>
+</html>

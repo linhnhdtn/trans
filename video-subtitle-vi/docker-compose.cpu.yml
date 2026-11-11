@@ -1,0 +1,13 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    ports:
+      - "8000:8000"
+    env_file: .env
+    user: "${UID:-1000}:${GID:-1000}"   # file trong data/ thuộc user máy host, không bị khóa root
+    volumes:
+      - ./data:/data
+      - ./models:/models
+    restart: unless-stopped
