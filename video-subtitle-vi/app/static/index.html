@@ -490,6 +490,7 @@ dialog::backdrop { background: rgba(10, 12, 16, .6); }
               <label><input type="radio" name="rate" value="+0%" checked><span>Thường</span></label>
               <label><input type="radio" name="rate" value="+15%"><span>Nhanh</span></label>
             </div>
+            <label id="mute-box" class="check hidden"><input id="mute-bg" type="checkbox"> Tắt hẳn tiếng gốc, chỉ giữ giọng đọc AI</label>
           </fieldset>
         </div>
           </div>
@@ -583,6 +584,7 @@ dialog::backdrop { background: rgba(10, 12, 16, .6); }
               <label><input type="radio" name="mode" value="soft"><span>Nhúng</span></label>
             </div>
             <span class="spacer"></span>
+            <button type="button" id="dub" class="btn ghost hidden" aria-pressed="false" title="Nghe giọng đọc khớp với video, không cần xuất">Nghe lồng tiếng</button>
             <a id="dl-srt" class="btn ghost" href="#"><svg class="icon"><use href="#i-down"/></svg>File SRT</a>
             <button id="render" class="btn primary">Xuất video</button>
           </div>
@@ -701,7 +703,8 @@ function savePrefs() {
 }
 function getSettings() {
   return { font_size: Number(radio("fs")) || 13, cover: radio("cover"),
-    brand: $("brand-on").checked ? $("brand").value.trim() : "", voice: $("voice").value, voice_rate: radio("rate") || "+0%" };
+    brand: $("brand-on").checked ? $("brand").value.trim() : "", voice: $("voice").value, voice_rate: radio("rate") || "+0%",
+    mute_bg: $("mute-bg").checked };
 }
 function setSettings(s) {
   setRadio("fs", s.font_size ?? 13);
@@ -711,6 +714,7 @@ function setSettings(s) {
   $("voice").dataset.want = s.voice || "";  // danh sách giọng có thể chưa tải xong
   $("voice").value = s.voice || "";
   setRadio("rate", s.voice_rate || "+0%");
+  $("mute-bg").checked = !!s.mute_bg;
   syncSettings();
 }
 function syncSettings() {
@@ -718,6 +722,10 @@ function syncSettings() {
   const voiceOn = !!$("voice").value;
   $("rate-box").classList.toggle("hidden", !voiceOn);
   $("voice-play").classList.toggle("hidden", !voiceOn);
+  $("dub").classList.toggle("hidden", !voiceOn);
+  $("mute-box").classList.toggle("hidden", !voiceOn);
+  if (dub) $("video").volume = dubBgVolume();
+  if (!voiceOn) dubOff();
   const soft = (visible("view-editor") ? radio("mode") : radio("auto")) === "soft";
   document.querySelectorAll("#settings .hard-only").forEach((f) => { f.disabled = soft; });
   $("mode-hint").textContent = radio("mode") === "soft"
@@ -751,7 +759,11 @@ $("voice-play").addEventListener("click", () => {
 });
 fetch("/api/voices").then((r) => r.json()).then((list) => {
   const sel = $("voice");
-  for (const v of list) sel.add(new Option(v.label, v.key));
+  const groups = {};
+  for (const v of list) {
+    if (!groups[v.group]) sel.append(groups[v.group] = Object.assign(document.createElement("optgroup"), { label: v.group }));
+    groups[v.group].append(new Option(v.label, v.key));
+  }
   sel.value = sel.dataset.want || "";
   syncSettings();
 }).catch(() => {});
@@ -917,6 +929,7 @@ async function poll() {
 
 // ---------- Editor ----------
 function openEditor() {
+  dubOff();
   show("editor");
   dirty.clear();
   setSaveState("saved");
@@ -928,7 +941,7 @@ function openEditor() {
   $("m-count").textContent = job.segments.length;
   $("dl-srt").href = `/api/jobs/${jobId}/files/srt`;
   const s = loadPrefs();
-  for (const k of ["font_size", "cover", "brand", "voice", "voice_rate"]) if (k in job) s[k] = job[k];
+  for (const k of ["font_size", "cover", "brand", "voice", "voice_rate", "mute_bg"]) if (k in job) s[k] = job[k];
   setRadio("mode", job.render_mode || job.auto_render || "hard");
   setSettings(s);
   $("cue-q").value = "";
@@ -1101,6 +1114,57 @@ async function save() {
   return saving;
 }
 $("save").addEventListener("click", save);
+
+// ---------- Nghe lồng tiếng khi review ----------
+// Track giọng đọc phát song song với video; tiếng gốc vặn nhỏ như khi xuất (TTS_BG_VOLUME).
+// Đoạn nào đọc không kịp thì video được phát chậm lại đúng như bản xuất (stretches: [a, b, f]).
+var dub = null, dubStretches = [];  // var: syncSettings() có thể gọi dubOff() trước khi tới dòng này
+const dubMap = (t) => dubStretches.reduce((o, [a, b, f]) => o + (f - 1) * Math.min(Math.max(t - a, 0), b - a), t);
+const dubSlow = (t) => dubStretches.find(([a, b]) => t >= a && t < b)?.[2] || 1;
+const dubBgVolume = () => ($("mute-bg").checked ? 0 : 0.15);  // như khi xuất: tắt hẳn hoặc TTS_BG_VOLUME
+function dubOff() {
+  if (!dub) return;
+  dub.pause();
+  dub = null;
+  $("video").volume = 1;
+  $("video").playbackRate = 1;
+  $("dub").textContent = "Nghe lồng tiếng";
+  $("dub").setAttribute("aria-pressed", "false");
+}
+function dubSync() {
+  const v = $("video");
+  if (!dub) return;
+  v.playbackRate = Math.max(0.0625, 1 / dubSlow(v.currentTime));  // 0.0625: mức chậm nhất trình duyệt cho phép
+  if (Math.abs(dub.currentTime - dubMap(v.currentTime)) > 0.25) dub.currentTime = dubMap(v.currentTime);
+  if (v.paused) dub.pause(); else if (dub.paused) dub.play().catch(() => {});
+}
+function dubLoop() {  // đoạn kéo dài có khi chỉ vài trăm ms, timeupdate (4 lần/giây) không đủ mịn
+  dubSync();
+  if (dub) requestAnimationFrame(dubLoop);
+}
+for (const ev of ["play", "pause", "seeked"]) $("video").addEventListener(ev, dubSync);
+$("dub").addEventListener("click", async () => {
+  if (dub) return dubOff();
+  const btn = $("dub");
+  btn.disabled = true;
+  btn.textContent = "Đang tạo giọng đọc…";
+  try {
+    if (dirty.size) await save();  // đọc đúng bản phụ đề đang sửa
+    const r = await api(`/api/jobs/${jobId}/voiceover`, { method: "POST", json: { voice: $("voice").value, voice_rate: radio("rate") || "+0%" } });
+    dubStretches = r.stretches || [];
+    dub = new Audio(`/api/jobs/${jobId}/files/voice?t=${Date.now()}`);
+    $("video").volume = dubBgVolume();
+    btn.textContent = "Tắt lồng tiếng";
+    btn.setAttribute("aria-pressed", "true");
+    if (dubStretches.length) toast(`Có ${dubStretches.length} đoạn đọc không kịp: video sẽ chậm lại ở đó cho khớp, bản xuất cũng vậy.`);
+    dubLoop();
+  } catch (e) {
+    btn.textContent = "Nghe lồng tiếng";
+    toast("Không tạo được giọng đọc: " + (e.message || e), "error");
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // ---------- Xuất video ----------
 $("render").addEventListener("click", async () => {

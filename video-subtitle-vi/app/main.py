@@ -146,21 +146,26 @@ def process_job(jid: str):
                    **({"render_status": "rendering", "render_mode": auto} if auto else {}))
         if auto:  # chạy luôn trong worker hiện tại, khỏi xếp hàng lại
             render_job(jid, auto, job.get("font_size", 13), job.get("cover", ""), job.get("brand", ""),
-                       job.get("voice", ""), job.get("voice_rate", "+0%"))
+                       clean_voice(job.get("voice", "")), job.get("voice_rate", "+0%"), job.get("mute_bg", False))
     except Exception as e:
         log.exception("Job %s lỗi", jid)
         update_job(jid, status="error", step="Xử lý thất bại", error=str(e)[:2000])
 
 
-def render_job(jid: str, mode: str, font_size: int, cover="", brand: str = "", voice="", voice_rate="+0%"):
+def render_job(jid: str, mode: str, font_size: int, cover="", brand: str = "", voice="", voice_rate="+0%",
+               mute_bg=False):
     try:
         job = load_job(jid)
-        audio = ""
+        d, audio, video, srt = job_dir(jid), "", job["video"], "vi.srt"
         if voice:
             update_job(jid, render_step="Đang tạo giọng đọc tiếng Việt")
-            audio = pipeline.build_voiceover(job_dir(jid), job["segments"], voice, voice_rate)
+            audio, stretches = pipeline.build_voiceover(d, job["segments"], voice, voice_rate,
+                                                        job.get("duration") or float("inf"))
+            if stretches:
+                update_job(jid, render_step=f"Đang kéo dài {len(stretches)} đoạn hình cho kịp lời đọc")
+                video, srt = pipeline.stretch_video(d, video, stretches, job["segments"])
         update_job(jid, render_step="Đang xuất video")
-        out = pipeline.render_video(job_dir(jid), job["video"], mode, font_size, cover, brand, audio)
+        out = pipeline.render_video(d, video, mode, font_size, cover, brand, audio, srt, mute_bg)
         outputs = {**job.get("outputs", {}), mode: out}
         update_job(jid, render_status="done", render_error=None, outputs=outputs)
     except Exception as e:
@@ -169,8 +174,8 @@ def render_job(jid: str, mode: str, font_size: int, cover="", brand: str = "", v
 
 
 def clean_voice(v) -> str:
-    """"" = không lồng tiếng (mặc định)."""
-    return v if v in pipeline.VOICES else ""
+    """"" = không lồng tiếng (mặc định). Khóa giọng edge-tts cũ được đổi sang giọng VieNeu."""
+    return pipeline.voice_key(v)
 
 
 def clean_cover(v) -> str:
@@ -184,7 +189,7 @@ async def create_job(file: Optional[UploadFile] = File(None), download_id: str =
                      source_lang: str = Form(""), glossary: str = Form(""),
                      ocr: str = Form(""), auto_render: str = Form(""), font_size: int = Form(13),
                      cover: str = Form(""), brand: str = Form(""), voice: str = Form(""),
-                     voice_rate: str = Form("+0%")):
+                     voice_rate: str = Form("+0%"), mute_bg: str = Form("")):
     if download_id:  # video đã tải bằng tab "Tải video": chép trên máy chủ, khỏi upload lại
         meta = load_download(download_id)
         src, filename = DL_DIR / download_id / meta["file"], download_name(meta)
@@ -219,7 +224,7 @@ async def create_job(file: Optional[UploadFile] = File(None), download_id: str =
            "auto_render": auto_render if auto_render in ("hard", "soft") else "",
            "font_size": max(8, min(font_size, 48)), "cover": clean_cover(cover),
            "brand": brand.strip()[:60], "voice": clean_voice(voice), "voice_rate": pipeline.valid_rate(voice_rate),
-           "segments": [], "outputs": {}, "render_status": None,
+           "mute_bg": mute_bg == "true", "segments": [], "outputs": {}, "render_status": None,
            "created_at": time.time(), "updated_at": time.time()}
     save_job(job)
     executor.submit(process_job, jid)
@@ -295,6 +300,7 @@ class RenderRequest(BaseModel):
     brand: str = ""
     voice: str = ""
     voice_rate: str = "+0%"
+    mute_bg: bool = False  # True: tắt hẳn tiếng gốc, chỉ còn giọng đọc AI
 
 
 @app.post("/api/jobs/{jid}/render")
@@ -308,10 +314,28 @@ def render(jid: str, body: RenderRequest):
         raise HTTPException(400, "mode phải là hard hoặc soft")
     voice, rate = clean_voice(body.voice), pipeline.valid_rate(body.voice_rate)
     update_job(jid, render_status="rendering", render_mode=body.mode, render_error=None,
-               voice=voice, voice_rate=rate)  # nhớ lựa chọn cho lần mở sau
+               voice=voice, voice_rate=rate, mute_bg=body.mute_bg)  # nhớ lựa chọn cho lần mở sau
     executor.submit(render_job, jid, body.mode, max(8, min(body.font_size, 48)),
-                    clean_cover(body.cover), body.brand.strip()[:60], voice, rate)
+                    clean_cover(body.cover), body.brand.strip()[:60], voice, rate, body.mute_bg)
     return {"ok": True}
+
+
+class VoiceoverRequest(BaseModel):
+    voice: str
+    voice_rate: str = "+0%"
+
+
+@app.post("/api/jobs/{jid}/voiceover")
+def voiceover(jid: str, body: VoiceoverRequest):
+    """Tạo track lồng tiếng để nghe thử ngay khi review (không xuất video). Câu đã đọc lấy từ cache."""
+    job = load_job(jid)
+    voice = clean_voice(body.voice)
+    if job["status"] != "ready" or not voice:
+        raise HTTPException(409, "Chưa có phụ đề hoặc chưa chọn giọng")
+    # ponytail: chạy đồng bộ trong request, video dài (vài trăm câu) chờ vài phút; chuyển sang job nền nếu cần
+    _, stretches = pipeline.build_voiceover(job_dir(jid), job["segments"], voice, pipeline.valid_rate(body.voice_rate),
+                                            job.get("duration") or float("inf"))
+    return {"stretches": stretches}  # trình phát làm chậm video đúng các đoạn này cho khớp giọng
 
 
 @app.get("/api/jobs/{jid}/files/{kind}")
@@ -336,6 +360,7 @@ def download(jid: str, kind: str):
         "video": (job["video"], None),
         "srt": ("vi.srt", f"{stem}.vi.srt"),
         "vtt": ("vi.vtt", None),
+        "voice": ("vi_voice.wav", None),
         "hard": (job.get("outputs", {}).get("hard"), f"{stem}.vi.hardsub.mp4"),
         "soft": (job.get("outputs", {}).get("soft"), f"{stem}.vi.softsub.mp4"),
     }
@@ -407,7 +432,8 @@ def download_file(did: str):
 # ---------- Giọng đọc ----------
 @app.get("/api/voices")
 def voices():
-    return [{"key": k, "label": v[0]} for k, v in pipeline.VOICES.items()]
+    return [{"key": k, "label": f"{k} – {g}, {style}", "group": f"Miền {r}"}
+            for k, (g, r, style) in pipeline.VOICES.items()]
 
 
 PREVIEW_TEXT = "Xin chào, đây là giọng đọc tiếng Việt dùng để lồng tiếng cho video của bạn."
@@ -415,18 +441,24 @@ PREVIEW_TEXT = "Xin chào, đây là giọng đọc tiếng Việt dùng để l
 
 @app.get("/api/tts/preview")
 def tts_preview(voice: str, rate: str = "+0%"):
-    if voice not in pipeline.VOICES:
+    voice = pipeline.voice_key(voice)
+    if not voice:
         raise HTTPException(400, "Giọng không hợp lệ")
     rate = pipeline.valid_rate(rate)
     d = DATA_DIR / "tts_preview"
     d.mkdir(exist_ok=True)
-    out = d / f"{voice}{rate.replace('%', 'pct')}.mp3"
+    out = d / f"vieneu-{voice}{rate.replace('%', 'pct')}.wav"
     if not out.exists():
+        raw = d / f"vieneu-{voice}.wav"
         try:
-            pipeline.tts_clip(PREVIEW_TEXT, voice, rate, out)
+            if not raw.exists():
+                pipeline.tts_clip(PREVIEW_TEXT, voice, raw)
+            tempo = pipeline.rate_factor(rate)
+            pipeline._run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(raw),
+                           *(["-af", f"atempo={tempo:.3f}"] if tempo != 1 else []), str(out)])
         except Exception as e:
             raise HTTPException(502, str(e)[:300])
-    return FileResponse(out, media_type="audio/mpeg")
+    return FileResponse(out, media_type="audio/wav")
 
 
 @app.get("/api/health")
