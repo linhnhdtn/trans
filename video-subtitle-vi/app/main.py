@@ -68,6 +68,26 @@ def update_job(jid: str, **fields) -> dict:
         return job
 
 
+def fail_interrupted_jobs():
+    """Hàng đợi nằm trong RAM: job còn dở lúc khởi động là đã chết theo tiến trình cũ, đừng để kẹt mãi."""
+    for p in JOBS_DIR.glob("*/job.json"):
+        try:
+            job = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        fix = {}
+        if job.get("status") not in ("ready", "error"):
+            fix.update(status="error", step="Xử lý bị gián đoạn",
+                       error="Máy chủ khởi động lại khi đang xử lý. Hãy tạo lại video này.")
+        if job.get("render_status") == "rendering":
+            fix.update(render_status="error", render_error="Máy chủ khởi động lại khi đang xuất. Hãy xuất lại.")
+        if fix:
+            save_job({**job, **fix})
+
+
+fail_interrupted_jobs()
+
+
 def throttled_progress(jid: str, base: float, span: float):
     last = [0.0]
 
@@ -160,11 +180,19 @@ def clean_cover(v) -> str:
 
 # ---------- API ----------
 @app.post("/api/jobs")
-async def create_job(file: UploadFile = File(...), source_lang: str = Form(""), glossary: str = Form(""),
+async def create_job(file: Optional[UploadFile] = File(None), download_id: str = Form(""),
+                     source_lang: str = Form(""), glossary: str = Form(""),
                      ocr: str = Form(""), auto_render: str = Form(""), font_size: int = Form(13),
                      cover: str = Form(""), brand: str = Form(""), voice: str = Form(""),
                      voice_rate: str = Form("+0%")):
-    ext = Path(file.filename or "").suffix.lower()
+    if download_id:  # video đã tải bằng tab "Tải video": chép trên máy chủ, khỏi upload lại
+        meta = load_download(download_id)
+        src, filename = DL_DIR / download_id / meta["file"], download_name(meta)
+    elif file:
+        src, filename = None, file.filename or ""
+    else:
+        raise HTTPException(400, "Chưa chọn video")
+    ext = Path(filename).suffix.lower()
     if ext not in ALLOWED_EXT:
         raise HTTPException(400, f"Định dạng không hỗ trợ. Dùng: {', '.join(sorted(ALLOWED_EXT))}")
 
@@ -172,19 +200,20 @@ async def create_job(file: UploadFile = File(...), source_lang: str = Form(""), 
     d = JOBS_DIR / jid
     d.mkdir(parents=True)
     video_name = f"input{ext}"
-    size, limit = 0, MAX_UPLOAD_MB * 1024 * 1024
-    with open(d / video_name, "wb") as f:
-        while chunk := await file.read(1024 * 1024):
-            size += len(chunk)
-            if size > limit:
-                f.close()
-                for p in d.iterdir():
-                    p.unlink()
-                d.rmdir()
-                raise HTTPException(413, f"File vượt quá {MAX_UPLOAD_MB} MB")
-            f.write(chunk)
+    if src:
+        shutil.copyfile(src, d / video_name)
+    else:
+        size, limit = 0, MAX_UPLOAD_MB * 1024 * 1024
+        with open(d / video_name, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    f.close()
+                    shutil.rmtree(d, ignore_errors=True)
+                    raise HTTPException(413, f"File vượt quá {MAX_UPLOAD_MB} MB")
+                f.write(chunk)
 
-    job = {"id": jid, "filename": file.filename, "video": video_name, "status": "queued",
+    job = {"id": jid, "filename": filename, "video": video_name, "status": "queued",
            "step": "Đang chờ xử lý", "progress": 0.0, "source_lang": source_lang.strip(),
            "glossary": glossary[:5000], "ocr": ocr == "1",
            "auto_render": auto_render if auto_render in ("hard", "soft") else "",
@@ -215,6 +244,16 @@ def list_jobs():
 @app.get("/api/jobs/{jid}")
 def get_job(jid: str):
     return load_job(jid)
+
+
+@app.delete("/api/jobs/{jid}")
+def delete_job(jid: str):
+    with _lock:
+        job = load_job(jid)
+        if job["status"] not in ("ready", "error") or job.get("render_status") == "rendering":
+            raise HTTPException(409, "Video đang được xử lý, chờ xong rồi mới xoá được")
+        shutil.rmtree(job_dir(jid))
+    return {"ok": True}
 
 
 class SegmentEdit(BaseModel):
@@ -349,13 +388,20 @@ def create_download(body: DownloadRequest):
     return meta
 
 
-@app.get("/api/downloads/{did}/file")
-def download_file(did: str):
+def load_download(did: str) -> dict:
     if not re.fullmatch(r"[0-9a-f]{32}", did) or not (DL_DIR / did / "info.json").exists():
         raise HTTPException(404, "Không tìm thấy video")
-    meta = json.loads((DL_DIR / did / "info.json").read_text(encoding="utf-8"))
-    name = re.sub(r'[\\/:*?"<>|\s]+', " ", meta["title"])[:80].strip(" .") or "video"
-    return FileResponse(DL_DIR / did / meta["file"], filename=name + meta["ext"])
+    return json.loads((DL_DIR / did / "info.json").read_text(encoding="utf-8"))
+
+
+def download_name(meta: dict) -> str:
+    return (re.sub(r'[\\/:*?"<>|\s]+', " ", meta["title"])[:80].strip(" .") or "video") + meta["ext"]
+
+
+@app.get("/api/downloads/{did}/file")
+def download_file(did: str):
+    meta = load_download(did)
+    return FileResponse(DL_DIR / did / meta["file"], filename=download_name(meta))
 
 
 # ---------- Giọng đọc ----------
