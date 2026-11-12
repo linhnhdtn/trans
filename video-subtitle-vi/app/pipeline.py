@@ -353,40 +353,89 @@ def write_vtt(segs, path: Path):
     path.write_text("WEBVTT\n\n" + "\n".join(blocks), encoding="utf-8")
 
 
-# ---------- 5b. Giọng đọc tiếng Việt (edge-tts) ----------
-# key: (tên hiển thị, giọng Microsoft, pitch). Trầm/cao = chỉnh pitch trên 2 giọng gốc.
+# ---------- 5b. Giọng đọc tiếng Việt (VieNeu-TTS v3 Turbo, chạy trên máy) ----------
+# 25 giọng có sẵn của vieneu==3.8.4 (Vieneu().list_preset_voices()): tên -> (giới tính, vùng, phong cách).
+# ponytail: ghi cứng để /api/voices không phải load model; nâng cấp vieneu thì chép lại danh sách.
 VOICES = {
-    "nu": ("Nữ – chuẩn", "vi-VN-HoaiMyNeural", "+0Hz"),
-    "nu-cao": ("Nữ – cao, trong", "vi-VN-HoaiMyNeural", "+15Hz"),
-    "nu-tram": ("Nữ – trầm, ấm", "vi-VN-HoaiMyNeural", "-12Hz"),
-    "nam": ("Nam – chuẩn", "vi-VN-NamMinhNeural", "+0Hz"),
-    "nam-tram": ("Nam – trầm", "vi-VN-NamMinhNeural", "-15Hz"),
-    "nam-cao": ("Nam – trẻ, cao", "vi-VN-NamMinhNeural", "+10Hz"),
+    "Hải Đăng": ("Nam", "Bắc", "tự nhiên"), "Ngọc Huyền": ("Nữ", "Bắc", "tự nhiên"),
+    "Adam bựa": ("Nam", "Bắc", "tự nhiên"), "Trúc Ly": ("Nữ", "Bắc", "tự nhiên"),
+    "Thiện Minh": ("Nam", "Bắc", "kể chuyện"), "Mai Anh": ("Nữ", "Bắc", "tin tức"),
+    "Thiền Tâm Đức": ("Nam", "Bắc", "kể chuyện"), "Minh Đức": ("Nam", "Bắc", "tin tức"),
+    "Phạm Tuyên": ("Nam", "Bắc", "tự nhiên"), "Xuân Vĩnh": ("Nam", "Bắc", "tự nhiên"),
+    "Thanh Bình": ("Nam", "Bắc", "kể chuyện"), "Ngọc Linh": ("Nữ", "Bắc", "kể chuyện"),
+    "Đoan Trang": ("Nữ", "Bắc", "tự nhiên"), "Quỳnh Anh": ("Nữ", "Bắc", "đọc truyện"),
+    "Quốc Tuấn": ("Nam", "Bắc", "tự nhiên"),
+    "Quang Sơn": ("Nam", "Trung", "tự nhiên"), "Ngọc Trân": ("Nữ", "Trung", "tự nhiên"),
+    "Thùy Dung": ("Nữ", "Nam", "tin tức"), "Thái Sơn": ("Nam", "Nam", "kể chuyện"),
+    "Thục Đoan": ("Nữ", "Nam", "kể chuyện"), "Minh Triết": ("Nam", "Nam", "tin tức"),
+    "Mỹ Duyên": ("Nữ", "Nam", "đọc truyện"), "Đức Trí": ("Nam", "Nam", "đọc truyện"),
+    "Kim Thanh": ("Nữ", "Nam", "đọc truyện"), "Adam": ("Nam", "Nam", "tự nhiên"),
 }
-TTS_BG_VOLUME = float(os.getenv("TTS_BG_VOLUME", "0.15"))  # âm lượng tiếng gốc khi có giọng đọc
-TTS_MAX_TEMPO = 1.5  # câu đọc dài hơn khung thời gian thì tăng tốc tối đa chừng này
-TTS_RATE = 24000
+# Job cũ lưu khóa giọng edge-tts -> giọng VieNeu gần nhất
+OLD_VOICES = {"nu": "Ngọc Huyền", "nu-cao": "Trúc Ly", "nu-tram": "Ngọc Linh",
+              "nam": "Hải Đăng", "nam-tram": "Thanh Bình", "nam-cao": "Adam bựa"}
+TTS_BG_VOLUME = round(float(os.getenv("TTS_BG_VOLUME", "0.15")) * 100)  # % tiếng gốc mặc định khi có giọng đọc
+
+
+def valid_bg_volume(v) -> int:
+    """% âm lượng tiếng gốc khi lồng tiếng, 0 = tắt hẳn."""
+    try:
+        return max(0, min(100, int(v)))
+    except (TypeError, ValueError):
+        return TTS_BG_VOLUME
+# Câu dài hơn khung (tới mốc câu sau) được tăng tốc tối đa chừng này, phần còn thừa thì đẩy câu sau lùi lại.
+# Cao quá nghe lúc nhanh lúc chậm; thấp quá thì lời trễ dần so với hình ở đoạn thoại dày.
+TTS_MAX_TEMPO = float(os.getenv("TTS_MAX_TEMPO", "1.15"))
+TTS_RATE = 48000
+TTS_GAP = 0.15  # nghỉ giữa 2 câu khi phải kéo dài video cho kịp đọc
+TTS_PRECISION = os.getenv("TTS_PRECISION", "fp32")  # fp32 | int8 (nhanh ~2x, cần CPU có AVX-VNNI)
 _RATE_RE = re.compile(r"[+-]\d{1,2}%")
+_tts_lock = threading.Lock()  # 1 model dùng chung, chạy lần lượt từng câu
 
 
 def valid_rate(rate: str) -> str:
     return rate if _RATE_RE.fullmatch(rate or "") else "+0%"
 
 
-def tts_clip(text: str, voice_key: str, rate: str, out: Path) -> Path:
-    import asyncio
-    import edge_tts
-    _, voice, pitch = VOICES[voice_key]
-    tmp = out.with_name(out.name + ".part")
-    for attempt in range(3):
-        try:
-            asyncio.run(edge_tts.Communicate(text, voice, rate=valid_rate(rate), pitch=pitch).save(str(tmp)))
+def voice_key(v) -> str:
+    """Khóa giọng hợp lệ, "" = không lồng tiếng."""
+    v = OLD_VOICES.get(v, v)
+    return v if v in VOICES else ""
+
+
+def rate_factor(rate: str) -> float:
+    """"+15%" -> 1.15. VieNeu Turbo không có tham số tốc độ nên tốc độ đọc làm bằng atempo."""
+    return 1 + int(valid_rate(rate)[:-1]) / 100
+
+
+_tts_model = None
+
+
+def _tts():
+    global _tts_model
+    if _tts_model is None:
+        from vieneu import Vieneu
+        log.info("Đang nạp model giọng đọc VieNeu-TTS (%s)...", TTS_PRECISION)
+        _tts_model = Vieneu(precision=TTS_PRECISION)
+    return _tts_model
+
+
+def tts_clip(text: str, voice_key: str, out: Path) -> Path:
+    """Đọc text bằng giọng voice_key, ghi WAV 48 kHz (tốc độ gốc, chỉnh tốc độ ở khâu ghép)."""
+    tmp = out.with_name(out.name + ".part.wav")
+    with _tts_lock:  # review và xuất video có thể cùng đọc 1 câu -> kiểm tra lại trong khóa
+        if not out.exists():
+            m = _tts()
+            m.save(m.infer(text, voice=voice_key), str(tmp))
             tmp.replace(out)
-            return out
-        except Exception as e:  # lỗi mạng / bị giới hạn tần suất
-            if attempt == 2:
-                raise RuntimeError(f"Không tạo được giọng đọc cho câu: {text[:60]!r}: {e}")
-            time.sleep(2 * (attempt + 1))
+    return out
+
+
+def clip_tempo(dur: float, slot: float, rate: str) -> float:
+    """Hệ số atempo: tốc độ người dùng chọn, rồi tăng thêm (tối đa TTS_MAX_TEMPO) nếu câu vẫn tràn khung."""
+    base = rate_factor(rate)
+    dur /= base
+    return base * (min(dur / slot, TTS_MAX_TEMPO) if slot > 0 and dur > slot else 1.0)
 
 
 def place_clips(clips):
@@ -400,45 +449,53 @@ def place_clips(clips):
     return pos
 
 
-def build_voiceover(job_dir: Path, segs, voice_key: str, rate: str) -> str:
-    """Đọc từng đoạn phụ đề rồi ghép thành 1 track WAV khớp thời gian video. Clip được cache theo
-    nội dung nên sửa 1 dòng chỉ đọc lại dòng đó."""
+def timeline_map(t: float, stretches) -> float:
+    """Thời điểm t của video gốc -> thời điểm trong video đã kéo dài. stretches: [(a, b, f)] = đoạn
+    [a, b) được làm chậm f lần."""
+    return t + sum((f - 1) * min(max(t - a, 0.0), b - a) for a, b, f in stretches)
+
+
+def build_voiceover(job_dir: Path, segs, voice_key: str, rate: str, duration=float("inf")):
+    """Đọc từng đoạn phụ đề rồi ghép thành 1 track WAV. Câu nào đọc không kịp (đã tăng tốc tối đa
+    TTS_MAX_TEMPO) thì đoạn hình tương ứng được kéo dài cho vừa -> trả (file wav, stretches) để
+    stretch_video làm chậm đúng các đoạn đó; track giọng đọc đã theo timeline sau khi kéo dài.
+    Clip được cache theo nội dung nên sửa 1 dòng chỉ đọc lại dòng đó."""
     import hashlib
     import wave
-    from concurrent.futures import ThreadPoolExecutor
     cache = job_dir / "tts"
     cache.mkdir(exist_ok=True)
     rate = valid_rate(rate)
-    items = []  # (seg, text, mp3)
+    items = []  # (seg, text, wav)
     for s in sorted(segs, key=lambda s: s["start"]):
         text = " ".join((s.get("vi") or s.get("src") or "").split())
         if re.search(r"\w", text):  # bỏ dòng chỉ có dấu câu
-            key = hashlib.sha1(f"{voice_key}|{rate}|{text}".encode()).hexdigest()[:16]
-            items.append((s, text, cache / f"{key}.mp3"))
+            key = hashlib.sha1(f"vieneu|{voice_key}|{text}".encode()).hexdigest()[:16]
+            items.append((s, text, cache / f"{key}.wav"))
 
-    def make(item):
-        s, text, mp3 = item
-        if not mp3.exists():
-            tts_clip(text, voice_key, rate, mp3)
-
-    with ThreadPoolExecutor(4) as ex:  # ponytail: 4 luồng song song, giảm nếu edge-tts báo giới hạn tần suất
-        list(ex.map(make, items))
+    for s, text, src in items:  # CPU chạy tuần tự, song song không nhanh hơn
+        if not src.exists():
+            tts_clip(text, voice_key, src)
 
     # Giải mã + tăng tốc câu nào dài hơn khung (tới mốc câu sau) rồi xếp lên timeline
-    pcm = []
-    for n, (s, text, mp3) in enumerate(items):
-        slot = (items[n + 1][0]["start"] if n + 1 < len(items) else float("inf")) - s["start"]
-        dur = probe_duration(mp3)
-        tempo = min(dur / slot, TTS_MAX_TEMPO) if slot > 0 and dur > slot else 1.0
-        wav = cache / "clip.wav"
-        _run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(mp3), "-ac", "1", "-ar", str(TTS_RATE),
-              *(["-af", f"atempo={tempo:.3f}"] if tempo > 1.01 else []), "-c:a", "pcm_s16le", str(wav)])
+    pcm, stretches = [], []
+    for n, (s, text, src) in enumerate(items):
+        end = items[n + 1][0]["start"] if n + 1 < len(items) else max(duration, s["start"])
+        slot = end - s["start"]
+        tempo = clip_tempo(probe_duration(src), slot, rate)
+        wav = cache / f"clip.{threading.get_ident()}.wav"  # review và xuất video có thể chạy cùng lúc
+        _run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-ac", "1", "-ar", str(TTS_RATE),
+              *(["-af", f"atempo={tempo:.3f}"] if abs(tempo - 1) > 0.01 else []), "-c:a", "pcm_s16le", str(wav)])
         with wave.open(str(wav)) as w:
             pcm.append((s["start"], w.readframes(w.getnframes())))
-    (cache / "clip.wav").unlink(missing_ok=True)
+        wav.unlink()
+        need = len(pcm[-1][1]) / 2 / TTS_RATE + TTS_GAP
+        if need > slot + 0.05 and 0 < slot < float("inf"):  # 2 câu cùng mốc (slot 0): để place_clips lùi câu sau
+            stretches.append((s["start"], end, need / slot))
+    pcm = [(timeline_map(t, stretches), d) for t, d in pcm]
 
     out = "vi_voice.wav"
-    with wave.open(str(job_dir / out), "wb") as w:
+    tmp = job_dir / f"{out}.{threading.get_ident()}.part"
+    with wave.open(str(tmp), "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(TTS_RATE)
@@ -446,7 +503,50 @@ def build_voiceover(job_dir: Path, segs, voice_key: str, rate: str) -> str:
         for p, (_, data) in zip(place_clips([(t, len(d) // 2) for t, d in pcm]), pcm):
             w.writeframes(b"\0\0" * (p - written) + data)
             written = p + len(data) // 2
-    return out
+    tmp.replace(job_dir / out)
+    return out, stretches
+
+
+def _atempo(speed: float) -> str:
+    """atempo chỉ nhận 0.5..100 -> nối nhiều nấc khi cần chậm hơn 0.5."""
+    parts = []
+    while speed < 0.5:
+        parts.append("atempo=0.5")
+        speed /= 0.5
+    return ",".join(parts + [f"atempo={speed:.5f}"])
+
+
+def stretch_video(job_dir: Path, video_name: str, stretches, segs):
+    """Làm chậm các đoạn [a, b) f lần (hình + tiếng gốc) và dời phụ đề theo. Trả (video, srt) mới."""
+    # ffmpeg không nhận 1 biểu thức quá dài -> nhiều setpts nối nhau, áp từ đoạn cuối về đầu: đoạn sau chỉ
+    # dời các mốc nằm sau nó nên mốc a, b của đoạn trước vẫn đúng như video gốc.
+    groups = [stretches[i:i + 25] for i in range(0, len(stretches), 25)][::-1]
+    fc = "[0:v]" + ",".join("setpts='(T" + "".join(f"+{f - 1:.5f}*clip(T-{a:.3f},0,{b - a:.3f})" for a, b, f in g)
+                            + ")/TB'" for g in groups) + "[v]"
+    amap = []
+    if has_audio(job_dir / video_name):
+        # Cắt tiếng gốc thành các khúc liền nhau, khúc nào cần kéo dài thì atempo chậm lại rồi nối
+        cuts, t = [], 0.0
+        for a, b, f in stretches:
+            if a > t:
+                cuts.append((t, a, 1.0))
+            cuts.append((a, b, f))
+            t = b
+        cuts.append((t, None, 1.0))
+        fc += f";[0:a]asplit={len(cuts)}" + "".join(f"[s{i}]" for i in range(len(cuts)))
+        for i, (a, b, f) in enumerate(cuts):
+            trim = f"start={a:.3f}" + (f":end={b:.3f}" if b is not None else "")
+            fc += f";[s{i}]atrim={trim},asetpts=PTS-STARTPTS" + (f",{_atempo(1 / f)}" if f > 1 else "") + f"[p{i}]"
+        fc += ";" + "".join(f"[p{i}]" for i in range(len(cuts))) + f"concat=n={len(cuts)}:v=0:a=1[a]"
+        amap = ["-map", "[a]", "-c:a", "aac", "-b:a", "192k"]
+    (job_dir / "stretch.filter").write_text(fc)
+    out = "input_stretched.mp4"
+    # ponytail: encode 2 lần (kéo dài rồi mới in phụ đề), crf 18 nên gần như không mất chất lượng
+    _run(["ffmpeg", "-y", "-loglevel", "error", "-i", video_name, "-filter_complex_script", "stretch.filter",
+          "-map", "[v]", *amap, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", out], cwd=job_dir)
+    write_srt([{**s, "start": timeline_map(s["start"], stretches), "end": timeline_map(s["end"], stretches)}
+               for s in segs], job_dir / "vi_stretched.srt")
+    return out, "vi_stretched.srt"
 
 
 def has_audio(path: Path) -> bool:
@@ -454,11 +554,12 @@ def has_audio(path: Path) -> bool:
                       "-of", "csv=p=0", str(path)]).strip())
 
 
-def _voice_mix(video: Path, idx: int):
-    """Filter trộn tiếng gốc (nhỏ lại) + giọng đọc ở input idx. Trả (filter, nhãn để -map)."""
-    if not has_audio(video):
+def _voice_mix(video: Path, idx: int, bg_volume=TTS_BG_VOLUME):
+    """Filter trộn tiếng gốc (bg_volume %) + giọng đọc ở input idx. Trả (filter, nhãn để -map).
+    bg_volume=0 / video không có tiếng: chỉ dùng giọng đọc."""
+    if not bg_volume or not has_audio(video):
         return "", f"{idx}:a"
-    return (f"[0:a]volume={TTS_BG_VOLUME}[a0];[a0][{idx}:a]amix=inputs=2:duration=first:normalize=0[aout]",
+    return (f"[0:a]volume={bg_volume / 100}[a0];[a0][{idx}:a]amix=inputs=2:duration=first:normalize=0[aout]",
             "[aout]")
 
 
@@ -521,7 +622,8 @@ def make_brand_overlay(W: int, H: int, title: str, out: Path) -> Path:
     return out
 
 
-def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cover="", brand="", voice="") -> str:
+def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cover="", brand="", voice="",
+                 srt_name="vi.srt", bg_volume=TTS_BG_VOLUME) -> str:
     """mode=hard: in cứng phụ đề (encode lại). mode=soft: nhúng track phụ đề (nhanh, bật/tắt được).
     voice = file WAV giọng đọc (build_voiceover): trộn với tiếng gốc nhỏ lại; soft giữ thêm track tiếng gốc.
     Chỉ với hard: cover="blur" làm mờ / "black" tô đen dải phụ đề gốc; brand=chữ trên thanh tiêu đề + logo.
@@ -529,7 +631,7 @@ def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cove
     out = f"output_{mode}.mp4"
     if mode == "hard":
         cover = "blur" if cover is True else (cover or "")
-        chain, margin_v, inputs, srt = ["[0:v]null"], 28, ["-i", video_name], "vi.srt"
+        chain, margin_v, inputs, srt = ["[0:v]null"], 28, ["-i", video_name], srt_name
         if cover:
             x, y, w, h = detect_sub_box(job_dir / video_name) or COVER_BOX
             log.info("Vùng che phụ đề gốc (%s): %s", cover, (x, y, w, h))
@@ -542,7 +644,7 @@ def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cove
                 tag = f"{{\\an5\\pos(192,{(y + y1) / 2 * 288:.1f})}}"
                 srt = "vi_render.srt"
                 (job_dir / srt).write_text(re.sub(r"(--> [^\n]*\n)", lambda m: m.group(1) + tag,
-                                                  (job_dir / "vi.srt").read_text(encoding="utf-8")), encoding="utf-8")
+                                                  (job_dir / srt_name).read_text(encoding="utf-8")), encoding="utf-8")
             else:
                 chain = [f"[0:v]split[v][c];[c]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},"
                          "boxblur=luma_radius='min(h/2-1,20)':luma_power=3:chroma_radius='min(ch/2-1,10)':chroma_power=3[b];"
@@ -557,17 +659,17 @@ def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cove
         fc = ",".join(chain) + f",subtitles={srt}:force_style='{style}'[out]"
         amap = "0:a?"
         if voice:
-            mix, amap = _voice_mix(job_dir / video_name, len(inputs) // 2)
+            mix, amap = _voice_mix(job_dir / video_name, len(inputs) // 2, bg_volume)
             inputs += ["-i", voice]
             fc += f";{mix}" if mix else ""
         _run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[out]", "-map", amap,
               "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
               "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out], cwd=job_dir)
-    elif voice:  # track 1 = lồng tiếng (mặc định), track 2 = tiếng gốc
-        mix, amap = _voice_mix(job_dir / video_name, 2)
-        _run(["ffmpeg", "-y", "-i", video_name, "-i", "vi.srt", "-i", voice,
+    elif voice:  # track 1 = lồng tiếng (mặc định), track 2 = tiếng gốc (bỏ khi tắt hẳn tiếng gốc)
+        mix, amap = _voice_mix(job_dir / video_name, 2, bg_volume)
+        _run(["ffmpeg", "-y", "-i", video_name, "-i", srt_name, "-i", voice,
               *(["-filter_complex", mix] if mix else []),
-              "-map", "0:v", "-map", amap, "-map", "0:a?", "-map", "1:0",
+              "-map", "0:v", "-map", amap, *(["-map", "0:a?"] if bg_volume else []), "-map", "1:0",
               "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-c:s", "mov_text",
               "-metadata:s:a:0", "language=vie",
               "-disposition:a:0", "default", *(["-disposition:a:1", "0"] if mix else []),
