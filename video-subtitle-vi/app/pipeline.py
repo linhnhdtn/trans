@@ -374,7 +374,15 @@ VOICES = {
 # Job cũ lưu khóa giọng edge-tts -> giọng VieNeu gần nhất
 OLD_VOICES = {"nu": "Ngọc Huyền", "nu-cao": "Trúc Ly", "nu-tram": "Ngọc Linh",
               "nam": "Hải Đăng", "nam-tram": "Thanh Bình", "nam-cao": "Adam bựa"}
-TTS_BG_VOLUME = float(os.getenv("TTS_BG_VOLUME", "0.15"))  # âm lượng tiếng gốc khi có giọng đọc
+TTS_BG_VOLUME = round(float(os.getenv("TTS_BG_VOLUME", "0.15")) * 100)  # % tiếng gốc mặc định khi có giọng đọc
+
+
+def valid_bg_volume(v) -> int:
+    """% âm lượng tiếng gốc khi lồng tiếng, 0 = tắt hẳn."""
+    try:
+        return max(0, min(100, int(v)))
+    except (TypeError, ValueError):
+        return TTS_BG_VOLUME
 # Câu dài hơn khung (tới mốc câu sau) được tăng tốc tối đa chừng này, phần còn thừa thì đẩy câu sau lùi lại.
 # Cao quá nghe lúc nhanh lúc chậm; thấp quá thì lời trễ dần so với hình ở đoạn thoại dày.
 TTS_MAX_TEMPO = float(os.getenv("TTS_MAX_TEMPO", "1.15"))
@@ -546,12 +554,12 @@ def has_audio(path: Path) -> bool:
                       "-of", "csv=p=0", str(path)]).strip())
 
 
-def _voice_mix(video: Path, idx: int, mute_bg=False):
-    """Filter trộn tiếng gốc (nhỏ lại) + giọng đọc ở input idx. Trả (filter, nhãn để -map).
-    mute_bg / video không có tiếng: chỉ dùng giọng đọc."""
-    if mute_bg or not has_audio(video):
+def _voice_mix(video: Path, idx: int, bg_volume=TTS_BG_VOLUME):
+    """Filter trộn tiếng gốc (bg_volume %) + giọng đọc ở input idx. Trả (filter, nhãn để -map).
+    bg_volume=0 / video không có tiếng: chỉ dùng giọng đọc."""
+    if not bg_volume or not has_audio(video):
         return "", f"{idx}:a"
-    return (f"[0:a]volume={TTS_BG_VOLUME}[a0];[a0][{idx}:a]amix=inputs=2:duration=first:normalize=0[aout]",
+    return (f"[0:a]volume={bg_volume / 100}[a0];[a0][{idx}:a]amix=inputs=2:duration=first:normalize=0[aout]",
             "[aout]")
 
 
@@ -615,7 +623,7 @@ def make_brand_overlay(W: int, H: int, title: str, out: Path) -> Path:
 
 
 def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cover="", brand="", voice="",
-                 srt_name="vi.srt", mute_bg=False) -> str:
+                 srt_name="vi.srt", bg_volume=TTS_BG_VOLUME) -> str:
     """mode=hard: in cứng phụ đề (encode lại). mode=soft: nhúng track phụ đề (nhanh, bật/tắt được).
     voice = file WAV giọng đọc (build_voiceover): trộn với tiếng gốc nhỏ lại; soft giữ thêm track tiếng gốc.
     Chỉ với hard: cover="blur" làm mờ / "black" tô đen dải phụ đề gốc; brand=chữ trên thanh tiêu đề + logo.
@@ -651,17 +659,17 @@ def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cove
         fc = ",".join(chain) + f",subtitles={srt}:force_style='{style}'[out]"
         amap = "0:a?"
         if voice:
-            mix, amap = _voice_mix(job_dir / video_name, len(inputs) // 2, mute_bg)
+            mix, amap = _voice_mix(job_dir / video_name, len(inputs) // 2, bg_volume)
             inputs += ["-i", voice]
             fc += f";{mix}" if mix else ""
         _run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[out]", "-map", amap,
               "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
               "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out], cwd=job_dir)
-    elif voice:  # track 1 = lồng tiếng (mặc định), track 2 = tiếng gốc (bỏ khi mute_bg)
-        mix, amap = _voice_mix(job_dir / video_name, 2, mute_bg)
+    elif voice:  # track 1 = lồng tiếng (mặc định), track 2 = tiếng gốc (bỏ khi tắt hẳn tiếng gốc)
+        mix, amap = _voice_mix(job_dir / video_name, 2, bg_volume)
         _run(["ffmpeg", "-y", "-i", video_name, "-i", srt_name, "-i", voice,
               *(["-filter_complex", mix] if mix else []),
-              "-map", "0:v", "-map", amap, *([] if mute_bg else ["-map", "0:a?"]), "-map", "1:0",
+              "-map", "0:v", "-map", amap, *(["-map", "0:a?"] if bg_volume else []), "-map", "1:0",
               "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-c:s", "mov_text",
               "-metadata:s:a:0", "language=vie",
               "-disposition:a:0", "default", *(["-disposition:a:1", "0"] if mix else []),

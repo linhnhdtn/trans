@@ -23,4 +23,8 @@ st = [(10.0, 12.0, 2.0)]
 assert timeline_map(5, st) == 5 and timeline_map(11, st) == 12 and timeline_map(20, st) == 22
 assert timeline_map(20, st + [(15.0, 16.0, 1.5)]) == 22.5
 assert _atempo(0.8) == "atempo=0.80000" and _atempo(0.2) == "atempo=0.5,atempo=0.5,atempo=0.80000"
+# Âm lượng tiếng gốc: kẹp 0..100, rác -> mặc định
+from app.pipeline import TTS_BG_VOLUME, valid_bg_volume
+assert valid_bg_volume("5") == 5 and valid_bg_volume(0) == 0 and valid_bg_volume(300) == 100
+assert valid_bg_volume(None) == TTS_BG_VOLUME == 15
 print("ok")

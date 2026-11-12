@@ -146,14 +146,15 @@ def process_job(jid: str):
                    **({"render_status": "rendering", "render_mode": auto} if auto else {}))
         if auto:  # chạy luôn trong worker hiện tại, khỏi xếp hàng lại
             render_job(jid, auto, job.get("font_size", 13), job.get("cover", ""), job.get("brand", ""),
-                       clean_voice(job.get("voice", "")), job.get("voice_rate", "+0%"), job.get("mute_bg", False))
+                       clean_voice(job.get("voice", "")), job.get("voice_rate", "+0%"),
+                       pipeline.valid_bg_volume(job.get("bg_volume")))
     except Exception as e:
         log.exception("Job %s lỗi", jid)
         update_job(jid, status="error", step="Xử lý thất bại", error=str(e)[:2000])
 
 
 def render_job(jid: str, mode: str, font_size: int, cover="", brand: str = "", voice="", voice_rate="+0%",
-               mute_bg=False):
+               bg_volume=pipeline.TTS_BG_VOLUME):
     try:
         job = load_job(jid)
         d, audio, video, srt = job_dir(jid), "", job["video"], "vi.srt"
@@ -165,7 +166,7 @@ def render_job(jid: str, mode: str, font_size: int, cover="", brand: str = "", v
                 update_job(jid, render_step=f"Đang kéo dài {len(stretches)} đoạn hình cho kịp lời đọc")
                 video, srt = pipeline.stretch_video(d, video, stretches, job["segments"])
         update_job(jid, render_step="Đang xuất video")
-        out = pipeline.render_video(d, video, mode, font_size, cover, brand, audio, srt, mute_bg)
+        out = pipeline.render_video(d, video, mode, font_size, cover, brand, audio, srt, bg_volume)
         outputs = {**job.get("outputs", {}), mode: out}
         update_job(jid, render_status="done", render_error=None, outputs=outputs)
     except Exception as e:
@@ -189,7 +190,7 @@ async def create_job(file: Optional[UploadFile] = File(None), download_id: str =
                      source_lang: str = Form(""), glossary: str = Form(""),
                      ocr: str = Form(""), auto_render: str = Form(""), font_size: int = Form(13),
                      cover: str = Form(""), brand: str = Form(""), voice: str = Form(""),
-                     voice_rate: str = Form("+0%"), mute_bg: str = Form("")):
+                     voice_rate: str = Form("+0%"), bg_volume: str = Form("")):
     if download_id:  # video đã tải bằng tab "Tải video": chép trên máy chủ, khỏi upload lại
         meta = load_download(download_id)
         src, filename = DL_DIR / download_id / meta["file"], download_name(meta)
@@ -224,7 +225,7 @@ async def create_job(file: Optional[UploadFile] = File(None), download_id: str =
            "auto_render": auto_render if auto_render in ("hard", "soft") else "",
            "font_size": max(8, min(font_size, 48)), "cover": clean_cover(cover),
            "brand": brand.strip()[:60], "voice": clean_voice(voice), "voice_rate": pipeline.valid_rate(voice_rate),
-           "mute_bg": mute_bg == "true", "segments": [], "outputs": {}, "render_status": None,
+           "bg_volume": pipeline.valid_bg_volume(bg_volume), "segments": [], "outputs": {}, "render_status": None,
            "created_at": time.time(), "updated_at": time.time()}
     save_job(job)
     executor.submit(process_job, jid)
@@ -300,7 +301,7 @@ class RenderRequest(BaseModel):
     brand: str = ""
     voice: str = ""
     voice_rate: str = "+0%"
-    mute_bg: bool = False  # True: tắt hẳn tiếng gốc, chỉ còn giọng đọc AI
+    bg_volume: int = pipeline.TTS_BG_VOLUME  # % tiếng gốc khi lồng tiếng, 0 = chỉ còn giọng đọc AI
 
 
 @app.post("/api/jobs/{jid}/render")
@@ -314,9 +315,9 @@ def render(jid: str, body: RenderRequest):
         raise HTTPException(400, "mode phải là hard hoặc soft")
     voice, rate = clean_voice(body.voice), pipeline.valid_rate(body.voice_rate)
     update_job(jid, render_status="rendering", render_mode=body.mode, render_error=None,
-               voice=voice, voice_rate=rate, mute_bg=body.mute_bg)  # nhớ lựa chọn cho lần mở sau
+               voice=voice, voice_rate=rate, bg_volume=pipeline.valid_bg_volume(body.bg_volume))  # nhớ lựa chọn cho lần mở sau
     executor.submit(render_job, jid, body.mode, max(8, min(body.font_size, 48)),
-                    clean_cover(body.cover), body.brand.strip()[:60], voice, rate, body.mute_bg)
+                    clean_cover(body.cover), body.brand.strip()[:60], voice, rate, pipeline.valid_bg_volume(body.bg_volume))
     return {"ok": True}
 
 

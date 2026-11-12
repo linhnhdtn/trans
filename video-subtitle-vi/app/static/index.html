@@ -490,7 +490,15 @@ dialog::backdrop { background: rgba(10, 12, 16, .6); }
               <label><input type="radio" name="rate" value="+0%" checked><span>Thường</span></label>
               <label><input type="radio" name="rate" value="+15%"><span>Nhanh</span></label>
             </div>
-            <label id="mute-box" class="check hidden"><input id="mute-bg" type="checkbox"> Tắt hẳn tiếng gốc, chỉ giữ giọng đọc AI</label>
+            <label id="bg-box" class="row hidden" style="flex-wrap:nowrap">
+              <span style="white-space:nowrap">Tiếng gốc của video</span>
+              <select id="bg-vol" aria-label="Âm lượng tiếng gốc khi lồng tiếng">
+                <option value="0">Tắt hẳn, chỉ giữ giọng AI</option>
+                <option value="5">5%</option><option value="10">10%</option>
+                <option value="15" selected>15% (mặc định)</option><option value="20">20%</option>
+                <option value="30">30%</option><option value="50">50%</option><option value="100">100% (giữ nguyên)</option>
+              </select>
+            </label>
           </fieldset>
         </div>
           </div>
@@ -704,7 +712,7 @@ function savePrefs() {
 function getSettings() {
   return { font_size: Number(radio("fs")) || 13, cover: radio("cover"),
     brand: $("brand-on").checked ? $("brand").value.trim() : "", voice: $("voice").value, voice_rate: radio("rate") || "+0%",
-    mute_bg: $("mute-bg").checked };
+    bg_volume: Number($("bg-vol").value) };
 }
 function setSettings(s) {
   setRadio("fs", s.font_size ?? 13);
@@ -714,7 +722,8 @@ function setSettings(s) {
   $("voice").dataset.want = s.voice || "";  // danh sách giọng có thể chưa tải xong
   $("voice").value = s.voice || "";
   setRadio("rate", s.voice_rate || "+0%");
-  $("mute-bg").checked = !!s.mute_bg;
+  $("bg-vol").value = String(s.bg_volume ?? 15);
+  if (!$("bg-vol").value) $("bg-vol").value = "15";  // giá trị lạ (sửa tay .env) -> mặc định
   syncSettings();
 }
 function syncSettings() {
@@ -723,7 +732,7 @@ function syncSettings() {
   $("rate-box").classList.toggle("hidden", !voiceOn);
   $("voice-play").classList.toggle("hidden", !voiceOn);
   $("dub").classList.toggle("hidden", !voiceOn);
-  $("mute-box").classList.toggle("hidden", !voiceOn);
+  $("bg-box").classList.toggle("hidden", !voiceOn);
   if (dub) $("video").volume = dubBgVolume();
   if (!voiceOn) dubOff();
   const soft = (visible("view-editor") ? radio("mode") : radio("auto")) === "soft";
@@ -941,7 +950,7 @@ function openEditor() {
   $("m-count").textContent = job.segments.length;
   $("dl-srt").href = `/api/jobs/${jobId}/files/srt`;
   const s = loadPrefs();
-  for (const k of ["font_size", "cover", "brand", "voice", "voice_rate", "mute_bg"]) if (k in job) s[k] = job[k];
+  for (const k of ["font_size", "cover", "brand", "voice", "voice_rate", "bg_volume"]) if (k in job) s[k] = job[k];
   setRadio("mode", job.render_mode || job.auto_render || "hard");
   setSettings(s);
   $("cue-q").value = "";
@@ -1121,7 +1130,7 @@ $("save").addEventListener("click", save);
 var dub = null, dubStretches = [];  // var: syncSettings() có thể gọi dubOff() trước khi tới dòng này
 const dubMap = (t) => dubStretches.reduce((o, [a, b, f]) => o + (f - 1) * Math.min(Math.max(t - a, 0), b - a), t);
 const dubSlow = (t) => dubStretches.find(([a, b]) => t >= a && t < b)?.[2] || 1;
-const dubBgVolume = () => ($("mute-bg").checked ? 0 : 0.15);  // như khi xuất: tắt hẳn hoặc TTS_BG_VOLUME
+const dubBgVolume = () => Number($("bg-vol").value) / 100;  // như khi xuất
 function dubOff() {
   if (!dub) return;
   dub.pause();
