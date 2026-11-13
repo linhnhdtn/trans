@@ -49,7 +49,21 @@ def get_model():
         return _model
 
 
-def _run(cmd, cwd=None):
+def _run(cmd, cwd=None, on_progress=None, duration=0.0):
+    """on_progress + duration (giây video ra): ffmpeg báo tiến độ qua -progress, gọi on_progress(0..1)."""
+    if on_progress and duration > 0:
+        import tempfile
+        with tempfile.TemporaryFile("w+") as err:  # stderr ra file: đọc stdout từng dòng không bị nghẽn pipe
+            proc = subprocess.Popen([cmd[0], "-progress", "pipe:1", "-nostats", *cmd[1:]], cwd=cwd,
+                                    stdout=subprocess.PIPE, stderr=err, text=True)
+            for line in proc.stdout:
+                if line.startswith("out_time_us=") and line[12:].strip().isdigit():
+                    on_progress(min(int(line[12:]) / 1e6 / duration, 1.0))
+            proc.wait()
+            if proc.returncode != 0:
+                err.seek(0)
+                raise RuntimeError(f"Lệnh lỗi: {' '.join(cmd[:3])}...\n{err.read()[-1500:]}")
+        return ""
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"Lệnh lỗi: {' '.join(cmd[:3])}...\n{proc.stderr[-1500:]}")
@@ -383,9 +397,6 @@ def valid_bg_volume(v) -> int:
         return max(0, min(100, int(v)))
     except (TypeError, ValueError):
         return TTS_BG_VOLUME
-# Câu dài hơn khung (tới mốc câu sau) được tăng tốc tối đa chừng này, phần còn thừa thì đẩy câu sau lùi lại.
-# Cao quá nghe lúc nhanh lúc chậm; thấp quá thì lời trễ dần so với hình ở đoạn thoại dày.
-TTS_MAX_TEMPO = float(os.getenv("TTS_MAX_TEMPO", "1.15"))
 TTS_RATE = 48000
 TTS_GAP = 0.15  # nghỉ giữa 2 câu khi phải kéo dài video cho kịp đọc
 TTS_PRECISION = os.getenv("TTS_PRECISION", "fp32")  # fp32 | int8 (nhanh ~2x, cần CPU có AVX-VNNI)
@@ -431,13 +442,6 @@ def tts_clip(text: str, voice_key: str, out: Path) -> Path:
     return out
 
 
-def clip_tempo(dur: float, slot: float, rate: str) -> float:
-    """Hệ số atempo: tốc độ người dùng chọn, rồi tăng thêm (tối đa TTS_MAX_TEMPO) nếu câu vẫn tràn khung."""
-    base = rate_factor(rate)
-    dur /= base
-    return base * (min(dur / slot, TTS_MAX_TEMPO) if slot > 0 and dur > slot else 1.0)
-
-
 def place_clips(clips):
     """clips: [(giây bắt đầu, số mẫu)] -> vị trí mẫu của từng clip. Đặt đúng mốc, nếu câu trước
     còn đọc dở thì lùi câu sau lại cho khỏi đè tiếng."""
@@ -455,9 +459,9 @@ def timeline_map(t: float, stretches) -> float:
     return t + sum((f - 1) * min(max(t - a, 0.0), b - a) for a, b, f in stretches)
 
 
-def build_voiceover(job_dir: Path, segs, voice_key: str, rate: str, duration=float("inf")):
-    """Đọc từng đoạn phụ đề rồi ghép thành 1 track WAV. Câu nào đọc không kịp (đã tăng tốc tối đa
-    TTS_MAX_TEMPO) thì đoạn hình tương ứng được kéo dài cho vừa -> trả (file wav, stretches) để
+def build_voiceover(job_dir: Path, segs, voice_key: str, rate: str, duration=float("inf"), on_progress=None):
+    """Đọc từng đoạn phụ đề rồi ghép thành 1 track WAV. Mọi câu đọc cùng 1 tốc độ (rate) cho đều giọng,
+    câu nào đọc không kịp thì đoạn hình tương ứng được kéo dài cho vừa -> trả (file wav, stretches) để
     stretch_video làm chậm đúng các đoạn đó; track giọng đọc đã theo timeline sau khi kéo dài.
     Clip được cache theo nội dung nên sửa 1 dòng chỉ đọc lại dòng đó."""
     import hashlib
@@ -472,16 +476,18 @@ def build_voiceover(job_dir: Path, segs, voice_key: str, rate: str, duration=flo
             key = hashlib.sha1(f"vieneu|{voice_key}|{text}".encode()).hexdigest()[:16]
             items.append((s, text, cache / f"{key}.wav"))
 
-    for s, text, src in items:  # CPU chạy tuần tự, song song không nhanh hơn
+    for n, (s, text, src) in enumerate(items):  # CPU chạy tuần tự, song song không nhanh hơn
         if not src.exists():
             tts_clip(text, voice_key, src)
+        if on_progress:
+            on_progress((n + 1) / len(items))
 
-    # Giải mã + tăng tốc câu nào dài hơn khung (tới mốc câu sau) rồi xếp lên timeline
+    # Giải mã ở 1 tốc độ cố định rồi xếp lên timeline
+    tempo = rate_factor(rate)
     pcm, stretches = [], []
     for n, (s, text, src) in enumerate(items):
         end = items[n + 1][0]["start"] if n + 1 < len(items) else max(duration, s["start"])
         slot = end - s["start"]
-        tempo = clip_tempo(probe_duration(src), slot, rate)
         wav = cache / f"clip.{threading.get_ident()}.wav"  # review và xuất video có thể chạy cùng lúc
         _run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-ac", "1", "-ar", str(TTS_RATE),
               *(["-af", f"atempo={tempo:.3f}"] if abs(tempo - 1) > 0.01 else []), "-c:a", "pcm_s16le", str(wav)])
@@ -516,7 +522,7 @@ def _atempo(speed: float) -> str:
     return ",".join(parts + [f"atempo={speed:.5f}"])
 
 
-def stretch_video(job_dir: Path, video_name: str, stretches, segs):
+def stretch_video(job_dir: Path, video_name: str, stretches, segs, on_progress=None):
     """Làm chậm các đoạn [a, b) f lần (hình + tiếng gốc) và dời phụ đề theo. Trả (video, srt) mới."""
     # ffmpeg không nhận 1 biểu thức quá dài -> nhiều setpts nối nhau, áp từ đoạn cuối về đầu: đoạn sau chỉ
     # dời các mốc nằm sau nó nên mốc a, b của đoạn trước vẫn đúng như video gốc.
@@ -543,7 +549,9 @@ def stretch_video(job_dir: Path, video_name: str, stretches, segs):
     out = "input_stretched.mp4"
     # ponytail: encode 2 lần (kéo dài rồi mới in phụ đề), crf 18 nên gần như không mất chất lượng
     _run(["ffmpeg", "-y", "-loglevel", "error", "-i", video_name, "-filter_complex_script", "stretch.filter",
-          "-map", "[v]", *amap, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", out], cwd=job_dir)
+          "-map", "[v]", *amap, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", out], cwd=job_dir,
+         on_progress=on_progress,
+         duration=timeline_map(probe_duration(job_dir / video_name), stretches) if on_progress else 0)
     write_srt([{**s, "start": timeline_map(s["start"], stretches), "end": timeline_map(s["end"], stretches)}
                for s in segs], job_dir / "vi_stretched.srt")
     return out, "vi_stretched.srt"
@@ -623,12 +631,14 @@ def make_brand_overlay(W: int, H: int, title: str, out: Path) -> Path:
 
 
 def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cover="", brand="", voice="",
-                 srt_name="vi.srt", bg_volume=TTS_BG_VOLUME) -> str:
+                 srt_name="vi.srt", bg_volume=TTS_BG_VOLUME, on_progress=None) -> str:
     """mode=hard: in cứng phụ đề (encode lại). mode=soft: nhúng track phụ đề (nhanh, bật/tắt được).
     voice = file WAV giọng đọc (build_voiceover): trộn với tiếng gốc nhỏ lại; soft giữ thêm track tiếng gốc.
     Chỉ với hard: cover="blur" làm mờ / "black" tô đen dải phụ đề gốc; brand=chữ trên thanh tiêu đề + logo.
     FontSize tính trên chiều cao chuẩn 288 của libass."""
     out = f"output_{mode}.mp4"
+    prog = {"on_progress": on_progress,
+            "duration": probe_duration(job_dir / video_name) if on_progress else 0}
     if mode == "hard":
         cover = "blur" if cover is True else (cover or "")
         chain, margin_v, inputs, srt = ["[0:v]null"], 28, ["-i", video_name], srt_name
@@ -664,7 +674,7 @@ def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cove
             fc += f";{mix}" if mix else ""
         _run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[out]", "-map", amap,
               "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-              "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out], cwd=job_dir)
+              "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out], cwd=job_dir, **prog)
     elif voice:  # track 1 = lồng tiếng (mặc định), track 2 = tiếng gốc (bỏ khi tắt hẳn tiếng gốc)
         mix, amap = _voice_mix(job_dir / video_name, 2, bg_volume)
         _run(["ffmpeg", "-y", "-i", video_name, "-i", srt_name, "-i", voice,
@@ -674,11 +684,11 @@ def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cove
               "-metadata:s:a:0", "language=vie",
               "-disposition:a:0", "default", *(["-disposition:a:1", "0"] if mix else []),
               "-metadata:s:s:0", "language=vie", "-disposition:s:0", "default",
-              "-movflags", "+faststart", out], cwd=job_dir)
+              "-movflags", "+faststart", out], cwd=job_dir, **prog)
     else:
         _run(["ffmpeg", "-y", "-i", video_name, "-i", "vi.srt",
               "-map", "0:v", "-map", "0:a?", "-map", "1:0",
               "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text",
               "-metadata:s:s:0", "language=vie", "-disposition:s:0", "default",
-              "-movflags", "+faststart", out], cwd=job_dir)
+              "-movflags", "+faststart", out], cwd=job_dir, **prog)
     return out

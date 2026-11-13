@@ -88,14 +88,14 @@ def fail_interrupted_jobs():
 fail_interrupted_jobs()
 
 
-def throttled_progress(jid: str, base: float, span: float):
+def throttled_progress(jid: str, base: float, span: float, field="progress"):
     last = [0.0]
 
     def cb(p: float):
         now = time.time()
         if now - last[0] >= 1.0 or p >= 1.0:
             last[0] = now
-            update_job(jid, progress=round(base + span * p, 3))
+            update_job(jid, **{field: round(base + span * p, 3)})
     return cb
 
 
@@ -143,7 +143,7 @@ def process_job(jid: str):
         (d / "audio.wav").unlink(missing_ok=True)
         auto = job.get("auto_render")
         update_job(jid, status="ready", step="Phụ đề đã sẵn sàng", progress=1.0, segments=segs,
-                   **({"render_status": "rendering", "render_mode": auto} if auto else {}))
+                   **({"render_status": "rendering", "render_mode": auto, "render_progress": 0} if auto else {}))
         if auto:  # chạy luôn trong worker hiện tại, khỏi xếp hàng lại
             render_job(jid, auto, job.get("font_size", 13), job.get("cover", ""), job.get("brand", ""),
                        clean_voice(job.get("voice", "")), job.get("voice_rate", "+0%"),
@@ -158,17 +158,22 @@ def render_job(jid: str, mode: str, font_size: int, cover="", brand: str = "", v
     try:
         job = load_job(jid)
         d, audio, video, srt = job_dir(jid), "", job["video"], "vi.srt"
+        # % chung cho cả lượt xuất: có giọng đọc thì đọc 0-60%, kéo dài hình 60-75%, xuất 75-100%
+        prog = lambda base, span: throttled_progress(jid, base, span, "render_progress")
+        start = 0.0
         if voice:
-            update_job(jid, render_step="Đang tạo giọng đọc tiếng Việt")
+            update_job(jid, render_step="Đang tạo giọng đọc tiếng Việt", render_progress=0.0)
             audio, stretches = pipeline.build_voiceover(d, job["segments"], voice, voice_rate,
-                                                        job.get("duration") or float("inf"))
+                                                        job.get("duration") or float("inf"), on_progress=prog(0, 0.6))
             if stretches:
                 update_job(jid, render_step=f"Đang kéo dài {len(stretches)} đoạn hình cho kịp lời đọc")
-                video, srt = pipeline.stretch_video(d, video, stretches, job["segments"])
-        update_job(jid, render_step="Đang xuất video")
-        out = pipeline.render_video(d, video, mode, font_size, cover, brand, audio, srt, bg_volume)
+                video, srt = pipeline.stretch_video(d, video, stretches, job["segments"], on_progress=prog(0.6, 0.15))
+            start = 0.75
+        update_job(jid, render_step="Đang xuất video", render_progress=start)
+        out = pipeline.render_video(d, video, mode, font_size, cover, brand, audio, srt, bg_volume,
+                                    on_progress=prog(start, 1 - start))
         outputs = {**job.get("outputs", {}), mode: out}
-        update_job(jid, render_status="done", render_error=None, outputs=outputs)
+        update_job(jid, render_status="done", render_error=None, render_progress=1.0, outputs=outputs)
     except Exception as e:
         log.exception("Render %s lỗi", jid)
         update_job(jid, render_status="error", render_error=str(e)[:2000])
@@ -242,7 +247,7 @@ def list_jobs():
         except (OSError, ValueError):
             continue
         jobs.append({k: j.get(k) for k in ("id", "filename", "status", "step", "progress", "detected_lang",
-                                           "duration", "outputs", "render_status", "created_at")})
+                                           "duration", "outputs", "render_status", "render_progress", "created_at")})
     jobs.sort(key=lambda j: j.get("created_at") or 0, reverse=True)
     return jobs
 
@@ -314,7 +319,7 @@ def render(jid: str, body: RenderRequest):
     if body.mode not in ("hard", "soft"):
         raise HTTPException(400, "mode phải là hard hoặc soft")
     voice, rate = clean_voice(body.voice), pipeline.valid_rate(body.voice_rate)
-    update_job(jid, render_status="rendering", render_mode=body.mode, render_error=None,
+    update_job(jid, render_status="rendering", render_mode=body.mode, render_error=None, render_progress=0,
                voice=voice, voice_rate=rate, bg_volume=pipeline.valid_bg_volume(body.bg_volume))  # nhớ lựa chọn cho lần mở sau
     executor.submit(render_job, jid, body.mode, max(8, min(body.font_size, 48)),
                     clean_cover(body.cover), body.brand.strip()[:60], voice, rate, pipeline.valid_bg_volume(body.bg_volume))

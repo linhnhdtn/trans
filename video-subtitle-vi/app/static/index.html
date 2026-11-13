@@ -1183,19 +1183,21 @@ $("render").addEventListener("click", async () => {
   } catch (e) { return toast(e.message, "error"); }
   job.render_status = "rendering";
   job.render_step = null;
+  job.render_progress = 0;
   updateRender();
   poll();
 });
 function updateRender() {
   const busy = job.render_status === "rendering";
   $("render").disabled = busy;
-  $("render").textContent = busy ? "Đang xuất…" : "Xuất video";
+  const pct = Math.round((job.render_progress || 0) * 100);
+  $("render").textContent = busy ? `Đang xuất ${pct}%` : "Xuất video";
   const st = $("render-status");
   st.className = job.render_status === "error" ? "error" : "muted";
   st.innerHTML = "";
   if (busy) {
     st.innerHTML = '<span class="spin"></span>';
-    st.append((job.render_step || "Đang xuất video") + ", video dài có thể mất vài phút.");
+    st.append(`${job.render_step || "Đang xuất video"}… ${pct}%`);
   } else if (job.render_status === "error") st.textContent = "Xuất video thất bại: " + job.render_error;
   const outs = job.outputs || {};
   $("render-links").replaceChildren(...[["hard", "Tải video in cứng"], ["soft", "Tải video nhúng phụ đề"]]
@@ -1261,7 +1263,7 @@ function card(j) {
   btn.append(img);
   if (j.duration) btn.append(badge("dur", fmt(j.duration)));
   const label = cat === "err" ? "Lỗi" : cat === "done" ? "Đã xuất" : cat === "subs" ? "" :
-    j.render_status === "rendering" ? "Đang xuất video" : `Đang xử lý ${Math.round((j.progress || 0) * 100)}%`;
+    j.render_status === "rendering" ? `Đang xuất ${Math.round((j.render_progress || 0) * 100)}%` : `Đang xử lý ${Math.round((j.progress || 0) * 100)}%`;
   if (label) btn.append(badge("st " + cat, label));
   if (cat === "run" && j.status !== "ready") {
     const bar = document.createElement("span");
