@@ -740,11 +740,13 @@ def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cove
                 y1 = 1.0 if y + h > 0.75 else y + h
                 chain.append(f"drawbox=x=0:y=ih*{y}:w=iw:h=ih*{y1 - y:.3f}:color=black:t=fill")
                 # Neo giữa chữ vào giữa dải đen (\an5\pos) để 1 hay 2 dòng đều nằm gọn trong dải.
-                # Hệ tọa độ phụ đề SRT của libass: 384 x 288.
+                # ffmpeg 7 xóa thẻ {\...} khi đọc SRT -> đổi sang ASS (PlayRes 384 x 288) rồi chèn thẻ vào ASS.
                 tag = f"{{\\an5\\pos(192,{(y + y1) / 2 * 288:.1f})}}"
-                srt = "vi_render.srt"
-                (job_dir / srt).write_text(re.sub(r"(--> [^\n]*\n)", lambda m: m.group(1) + tag,
-                                                  (job_dir / srt_name).read_text(encoding="utf-8")), encoding="utf-8")
+                srt = "vi_render.ass"
+                _run(["ffmpeg", "-y", "-i", srt_name, srt], cwd=job_dir)
+                (job_dir / srt).write_text(re.sub(r"^(Dialogue:(?:[^,]*,){9})", lambda m: m.group(1) + tag,
+                                                  (job_dir / srt).read_text(encoding="utf-8"), flags=re.M),
+                                           encoding="utf-8")
             else:
                 chain = [f"[0:v]split[v][c];[c]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},"
                          "boxblur=luma_radius='min(h/2-1,20)':luma_power=3:chroma_radius='min(ch/2-1,10)':chroma_power=3[b];"
