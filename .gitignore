@@ -1,6 +1,6 @@
 # Bí mật, dữ liệu, model (nặng / riêng tư)
 .env
-**/data/
+**/data/*
 **/models/
 **/ollama/
 __pycache__/
