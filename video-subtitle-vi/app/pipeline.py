@@ -155,9 +155,12 @@ def build_segments(words, lang):
         text = "".join(x["text"] for x in cur).strip()
         dur = cur[-1]["end"] - cur[0]["start"]
         sentence_done = bool(_SENTENCE_END.search(w["text"].strip())) and len(text) >= char_limit // 3
-        if sentence_done:
+        # Hết 1 cụm (dấu phẩy) mà đã đủ dài thì ngắt luôn: phụ đề và bản dịch trọn ý
+        phrase_done = bool(_SOFT_BREAK.search(w["text"].strip())) and len(text) >= char_limit // 2
+        if sentence_done or phrase_done:
             flush()
-        elif dur >= MAX_SEG_SECONDS or len(text) >= char_limit:
+        # Cho vượt giới hạn tới 1.5x để chờ dấu câu, thay vì cắt ngang cụm từ ("很奇怪 | 的梦")
+        elif dur >= MAX_SEG_SECONDS or len(text) >= char_limit * 3 // 2:
             k = _split_point(cur, cjk, char_limit // 2)
             rest = cur[k:]
             del cur[k:]
@@ -385,6 +388,11 @@ VOICES = {
     "Mỹ Duyên": ("Nữ", "Nam", "đọc truyện"), "Đức Trí": ("Nam", "Nam", "đọc truyện"),
     "Kim Thanh": ("Nữ", "Nam", "đọc truyện"), "Adam": ("Nam", "Nam", "tự nhiên"),
 }
+# Giọng nhân bản: data/voices/<tên giọng>.wav (5–8 s, 1 người nói, sạch) -> đọc bằng ref_audio, không cần train.
+# Quét 1 lần lúc khởi động: thêm/đổi tên file thì restart app.
+VOICES_DIR = Path(os.getenv("DATA_DIR", "./data")) / "voices"
+CUSTOM_VOICES = {p.stem: p for p in sorted(VOICES_DIR.glob("*.wav"))}
+VOICES.update({k: ("", "", "nhân bản") for k in CUSTOM_VOICES})
 # Job cũ lưu khóa giọng edge-tts -> giọng VieNeu gần nhất
 OLD_VOICES = {"nu": "Ngọc Huyền", "nu-cao": "Trúc Ly", "nu-tram": "Ngọc Linh",
               "nam": "Hải Đăng", "nam-tram": "Thanh Bình", "nam-cao": "Adam bựa"}
@@ -392,9 +400,9 @@ TTS_BG_VOLUME = round(float(os.getenv("TTS_BG_VOLUME", "0.15")) * 100)  # % ti�
 
 
 def valid_bg_volume(v) -> int:
-    """% âm lượng tiếng gốc khi lồng tiếng, 0 = tắt hẳn."""
+    """% âm lượng tiếng gốc (hoặc nhạc nền đã tách) khi lồng tiếng, 0 = tắt hẳn, tối đa 200."""
     try:
-        return max(0, min(100, int(v)))
+        return max(0, min(200, int(v)))
     except (TypeError, ValueError):
         return TTS_BG_VOLUME
 TTS_RATE = 48000
@@ -419,6 +427,12 @@ def rate_factor(rate: str) -> float:
     return 1 + int(valid_rate(rate)[:-1]) / 100
 
 
+def voice_id(v: str) -> str:
+    """Khóa cache của giọng: giọng nhân bản kèm thời điểm sửa file mẫu, thay file thì đọc lại."""
+    p = CUSTOM_VOICES.get(v)
+    return f"{v}@{p.stat().st_mtime_ns}" if p else v
+
+
 _tts_model = None
 
 
@@ -437,7 +451,9 @@ def tts_clip(text: str, voice_key: str, out: Path) -> Path:
     with _tts_lock:  # review và xuất video có thể cùng đọc 1 câu -> kiểm tra lại trong khóa
         if not out.exists():
             m = _tts()
-            m.save(m.infer(text, voice=voice_key), str(tmp))
+            ref = CUSTOM_VOICES.get(voice_key)
+            wav = m.infer(text, ref_audio=str(ref), denoise=False) if ref else m.infer(text, voice=voice_key)
+            m.save(wav, str(tmp))
             tmp.replace(out)
     return out
 
@@ -473,7 +489,7 @@ def build_voiceover(job_dir: Path, segs, voice_key: str, rate: str, duration=flo
     for s in sorted(segs, key=lambda s: s["start"]):
         text = " ".join((s.get("vi") or s.get("src") or "").split())
         if re.search(r"\w", text):  # bỏ dòng chỉ có dấu câu
-            key = hashlib.sha1(f"vieneu|{voice_key}|{text}".encode()).hexdigest()[:16]
+            key = hashlib.sha1(f"vieneu|{voice_id(voice_key)}|{text}".encode()).hexdigest()[:16]
             items.append((s, text, cache / f"{key}.wav"))
 
     for n, (s, text, src) in enumerate(items):  # CPU chạy tuần tự, song song không nhanh hơn
@@ -560,6 +576,80 @@ def stretch_video(job_dir: Path, video_name: str, stretches, segs, on_progress=N
 def has_audio(path: Path) -> bool:
     return bool(_run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
                       "-of", "csv=p=0", str(path)]).strip())
+
+
+# ---------- 5c. Bỏ giọng gốc, giữ nhạc nền + tiếng động ----------
+BGM_MODES = {"auto": "tự chọn", "fast": "nhanh – Demucs", "clean": "sạch – BS-Roformer"}
+SEP_MODEL_DIR = Path(os.getenv("HF_HOME", "/models")) / "separator"
+_TQDM_RE = re.compile(rb"(\d{1,3})%\|")
+# Vệt giọng Demucs để sót nằm ở dải cao: ép nhỏ dải >1,2 kHz của nhạc đúng lúc người gốc nói
+# (khóa theo phần giọng Demucs tách ra). Dải thấp giữ nguyên để nhạc không bị hụt.
+_DEMUCS_CLEAN = ("[0:a]{f},asplit=2[m1][m2];[m1]lowpass=f=1200:poles=2[lo];[m2]highpass=f=1200:poles=2[hi];"
+                 "[1:a]{f},highpass=f=300,volume=4[key];"
+                 "[hi][key]sidechaincompress=threshold=0.01:ratio=20:attack=5:release=120[hid];"
+                 "[lo][hid]amix=inputs=2:normalize=0").format(
+    f="aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo")
+
+
+def valid_bgm(v) -> str:
+    """"" = giữ tiếng gốc như cũ (vặn nhỏ cả giọng lẫn nhạc)."""
+    return v if v in BGM_MODES else ""
+
+
+def has_gpu() -> bool:
+    return Path("/dev/nvidia0").exists()  # container chạy với GPU NVIDIA mới thấy thiết bị này
+
+
+def bgm_method(mode: str) -> str:
+    """auto: có GPU thì BS-Roformer (sạch), CPU thì Demucs (Roformer trên CPU chậm >10x thời lượng)."""
+    return ("clean" if has_gpu() else "fast") if mode == "auto" else mode
+
+
+def _run_tqdm(cmd, cwd, on_progress=None):
+    """Chạy lệnh in tiến độ kiểu tqdm ("45%|") ra stderr, báo on_progress(0..1)."""
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    tail = b""
+    for chunk in iter(lambda: proc.stderr.read(512), b""):
+        tail = (tail + chunk)[-4000:]
+        hits = _TQDM_RE.findall(tail[-600:])
+        if hits and on_progress:
+            on_progress(min(int(hits[-1]) / 100, 1.0))
+    if proc.wait() != 0:
+        raise RuntimeError(f"Lệnh lỗi: {' '.join(map(str, cmd[:4]))}...\n{tail.decode(errors='ignore')[-1500:]}")
+
+
+def separate_music(job_dir: Path, video_name: str, mode: str, on_progress=None) -> str:
+    """Tách bỏ giọng nói gốc, giữ nhạc nền + tiếng động. Trả tên video mới: hình giữ nguyên, tiếng = nhạc nền,
+    nên các bước sau (kéo dài hình, trộn giọng đọc) dùng như video thường. Mỗi cách tách chỉ chạy 1 lần/video.
+    fast = Demucs (CPU ~0,4–0,7x thời lượng, còn chút vệt giọng); clean = BS-Roformer (sạch, nên có GPU)."""
+    import shutil
+    import sys
+    method = bgm_method(mode)
+    out = f"input_nhac_{method}.mp4"
+    if (job_dir / out).exists() or not has_audio(job_dir / video_name):
+        return out if (job_dir / out).exists() else video_name
+    work = job_dir / "sep"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir()
+    try:
+        _run(["ffmpeg", "-y", "-loglevel", "error", "-i", video_name, "-vn", "-ac", "2", "-ar", "44100",
+              "sep/goc.wav"], cwd=job_dir)
+        if method == "fast":
+            _run_tqdm([sys.executable, "-m", "demucs", "-n", "htdemucs", "--two-stems=vocals", "-o", ".", "goc.wav"],
+                      work, on_progress)
+            stems = work / "htdemucs" / "goc"
+            _run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(stems / "no_vocals.wav"),
+                  "-i", str(stems / "vocals.wav"), "-filter_complex", _DEMUCS_CLEAN, "nhac.wav"], cwd=work)
+        else:
+            _run_tqdm(["audio-separator", "goc.wav", "-m", "model_bs_roformer_ep_317_sdr_12.9755.ckpt",
+                       "--model_file_dir", str(SEP_MODEL_DIR), "--output_dir", ".", "--output_format", "WAV",
+                       "--single_stem", "Instrumental"], work, on_progress)
+            next(work.glob("*Instrumental*.wav")).rename(work / "nhac.wav")
+        _run(["ffmpeg", "-y", "-loglevel", "error", "-i", video_name, "-i", "sep/nhac.wav", "-map", "0:v",
+              "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", out], cwd=job_dir)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return out
 
 
 def _voice_mix(video: Path, idx: int, bg_volume=TTS_BG_VOLUME):

@@ -9,3 +9,6 @@ rapidocr_onnxruntime==1.4.4
 yt-dlp>=2026.10.21
 vieneu==3.8.4
 onnxruntime==1.22.1  # bản mới (đã thử 1.31) chặn file trọng số dạng symlink trong cache HuggingFace -> VieNeu không nạp được model
+# Bỏ giọng gốc, giữ nhạc nền. torch cài riêng trong Dockerfile (bản CPU hoặc CUDA) trước file này
+demucs==4.1.0
+audio-separator==0.48.0

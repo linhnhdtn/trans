@@ -147,24 +147,30 @@ def process_job(jid: str):
         if auto:  # chạy luôn trong worker hiện tại, khỏi xếp hàng lại
             render_job(jid, auto, job.get("font_size", 13), job.get("cover", ""), job.get("brand", ""),
                        clean_voice(job.get("voice", "")), job.get("voice_rate", "+0%"),
-                       pipeline.valid_bg_volume(job.get("bg_volume")))
+                       pipeline.valid_bg_volume(job.get("bg_volume")), pipeline.valid_bgm(job.get("bgm")))
     except Exception as e:
         log.exception("Job %s lỗi", jid)
         update_job(jid, status="error", step="Xử lý thất bại", error=str(e)[:2000])
 
 
 def render_job(jid: str, mode: str, font_size: int, cover="", brand: str = "", voice="", voice_rate="+0%",
-               bg_volume=pipeline.TTS_BG_VOLUME):
+               bg_volume=pipeline.TTS_BG_VOLUME, bgm=""):
     try:
         job = load_job(jid)
         d, audio, video, srt = job_dir(jid), "", job["video"], "vi.srt"
-        # % chung cho cả lượt xuất: có giọng đọc thì đọc 0-60%, kéo dài hình 60-75%, xuất 75-100%
+        # % chung cho cả lượt xuất: có giọng đọc thì (tách nhạc 0-30%) đọc ...-60%, kéo dài hình 60-75%, xuất 75-100%
         prog = lambda base, span: throttled_progress(jid, base, span, "render_progress")
         start = 0.0
         if voice:
-            update_job(jid, render_step="Đang tạo giọng đọc tiếng Việt", render_progress=0.0)
+            if bgm:  # thay tiếng gốc bằng nhạc nền đã bỏ giọng; kéo dài hình + trộn giọng đọc dùng luôn tiếng này
+                label = pipeline.BGM_MODES[pipeline.bgm_method(bgm)]
+                update_job(jid, render_step=f"Đang bỏ giọng gốc, giữ nhạc nền ({label})", render_progress=0.0)
+                video = pipeline.separate_music(d, video, bgm, on_progress=prog(0, 0.3))
+                start = 0.3
+            update_job(jid, render_step="Đang tạo giọng đọc tiếng Việt", render_progress=start)
             audio, stretches = pipeline.build_voiceover(d, job["segments"], voice, voice_rate,
-                                                        job.get("duration") or float("inf"), on_progress=prog(0, 0.6))
+                                                        job.get("duration") or float("inf"),
+                                                        on_progress=prog(start, 0.6 - start))
             if stretches:
                 update_job(jid, render_step=f"Đang kéo dài {len(stretches)} đoạn hình cho kịp lời đọc")
                 video, srt = pipeline.stretch_video(d, video, stretches, job["segments"], on_progress=prog(0.6, 0.15))
@@ -195,7 +201,7 @@ async def create_job(file: Optional[UploadFile] = File(None), download_id: str =
                      source_lang: str = Form(""), glossary: str = Form(""),
                      ocr: str = Form(""), auto_render: str = Form(""), font_size: int = Form(13),
                      cover: str = Form(""), brand: str = Form(""), voice: str = Form(""),
-                     voice_rate: str = Form("+0%"), bg_volume: str = Form("")):
+                     voice_rate: str = Form("+0%"), bg_volume: str = Form(""), bgm: str = Form("")):
     if download_id:  # video đã tải bằng tab "Tải video": chép trên máy chủ, khỏi upload lại
         meta = load_download(download_id)
         src, filename = DL_DIR / download_id / meta["file"], download_name(meta)
@@ -230,7 +236,7 @@ async def create_job(file: Optional[UploadFile] = File(None), download_id: str =
            "auto_render": auto_render if auto_render in ("hard", "soft") else "",
            "font_size": max(8, min(font_size, 48)), "cover": clean_cover(cover),
            "brand": brand.strip()[:60], "voice": clean_voice(voice), "voice_rate": pipeline.valid_rate(voice_rate),
-           "bg_volume": pipeline.valid_bg_volume(bg_volume), "segments": [], "outputs": {}, "render_status": None,
+           "bg_volume": pipeline.valid_bg_volume(bg_volume), "bgm": pipeline.valid_bgm(bgm), "segments": [], "outputs": {}, "render_status": None,
            "created_at": time.time(), "updated_at": time.time()}
     save_job(job)
     executor.submit(process_job, jid)
@@ -307,6 +313,7 @@ class RenderRequest(BaseModel):
     voice: str = ""
     voice_rate: str = "+0%"
     bg_volume: int = pipeline.TTS_BG_VOLUME  # % tiếng gốc khi lồng tiếng, 0 = chỉ còn giọng đọc AI
+    bgm: str = ""  # "" = giữ tiếng gốc | auto | fast | clean = bỏ giọng gốc, giữ nhạc nền
 
 
 @app.post("/api/jobs/{jid}/render")
@@ -319,10 +326,11 @@ def render(jid: str, body: RenderRequest):
     if body.mode not in ("hard", "soft"):
         raise HTTPException(400, "mode phải là hard hoặc soft")
     voice, rate = clean_voice(body.voice), pipeline.valid_rate(body.voice_rate)
+    bg, bgm = pipeline.valid_bg_volume(body.bg_volume), pipeline.valid_bgm(body.bgm)
     update_job(jid, render_status="rendering", render_mode=body.mode, render_error=None, render_progress=0,
-               voice=voice, voice_rate=rate, bg_volume=pipeline.valid_bg_volume(body.bg_volume))  # nhớ lựa chọn cho lần mở sau
+               voice=voice, voice_rate=rate, bg_volume=bg, bgm=bgm)  # nhớ lựa chọn cho lần mở sau
     executor.submit(render_job, jid, body.mode, max(8, min(body.font_size, 48)),
-                    clean_cover(body.cover), body.brand.strip()[:60], voice, rate, pipeline.valid_bg_volume(body.bg_volume))
+                    clean_cover(body.cover), body.brand.strip()[:60], voice, rate, bg, bgm)
     return {"ok": True}
 
 
@@ -438,7 +446,8 @@ def download_file(did: str):
 # ---------- Giọng đọc ----------
 @app.get("/api/voices")
 def voices():
-    return [{"key": k, "label": f"{k} – {g}, {style}", "group": f"Miền {r}"}
+    return [{"key": k, "label": f"{k} – " + ", ".join(filter(None, (g, style))),
+             "group": f"Miền {r}" if r else "Giọng nhân bản"}
             for k, (g, r, style) in pipeline.VOICES.items()]
 
 
@@ -453,9 +462,10 @@ def tts_preview(voice: str, rate: str = "+0%"):
     rate = pipeline.valid_rate(rate)
     d = DATA_DIR / "tts_preview"
     d.mkdir(exist_ok=True)
-    out = d / f"vieneu-{voice}{rate.replace('%', 'pct')}.wav"
+    vid = pipeline.voice_id(voice).replace("@", "-")
+    out = d / f"vieneu-{vid}{rate.replace('%', 'pct')}.wav"
     if not out.exists():
-        raw = d / f"vieneu-{voice}.wav"
+        raw = d / f"vieneu-{vid}.wav"
         try:
             if not raw.exists():
                 pipeline.tts_clip(PREVIEW_TEXT, voice, raw)
@@ -469,7 +479,7 @@ def tts_preview(voice: str, rate: str = "+0%"):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "translator": pipeline.TRANSLATOR, "whisper": pipeline.WHISPER_MODEL}
+    return {"ok": True, "translator": pipeline.TRANSLATOR, "whisper": pipeline.WHISPER_MODEL, "gpu": pipeline.has_gpu()}
 
 
 @app.get("/brand_logo.png")

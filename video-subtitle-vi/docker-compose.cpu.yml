@@ -6,6 +6,8 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      - HOME=/tmp   # user 1000 không ghi được /.cache (VieNeu cần khi nhân bản giọng)
     user: "${UID:-1000}:${GID:-1000}"   # file trong data/ thuộc user máy host, không bị khóa root
     volumes:
       - ./data:/data

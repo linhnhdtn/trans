@@ -1,13 +1,16 @@
 FROM python:3.11-slim
 
-ENV PYTHONUNBUFFERED=1 DATA_DIR=/data HF_HOME=/models \
+ENV PYTHONUNBUFFERED=1 DATA_DIR=/data HF_HOME=/models TORCH_HOME=/models/torch \
     WHISPER_DEVICE=cpu WHISPER_COMPUTE=int8
 
+# gcc/g++: audio-separator cần build diffq
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg fonts-noto-core fontconfig libgl1 libglib2.0-0 \
+      ffmpeg fonts-noto-core fontconfig libgl1 libglib2.0-0 gcc g++ \
  && fc-cache -f && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+# PyTorch bản CPU (nhẹ hơn bản CUDA ~2 GB), cài trước để requirements không kéo bản CUDA về
+RUN pip install --no-cache-dir torch==2.15.0 torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
