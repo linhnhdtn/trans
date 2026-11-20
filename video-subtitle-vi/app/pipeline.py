@@ -738,7 +738,9 @@ def render_video(job_dir: Path, video_name: str, mode="hard", font_size=13, cove
             if cover == "black":
                 # Dải đen hết chiều ngang; phụ đề gốc ở sát đáy thì tô tới mép dưới như kiểu khung phim
                 y1 = 1.0 if y + h > 0.75 else y + h
-                chain.append(f"drawbox=x=0:y=ih*{y}:w=iw:h=ih*{y1 - y:.3f}:color=black:t=fill")
+                # Sát đáy thì h=ih (drawbox tự cắt phần thừa): ih*y và ih*h bị làm tròn xuống riêng -> hở 1px trắng
+                h_expr = "ih" if y1 == 1.0 else f"ih*{y1 - y:.3f}"
+                chain.append(f"drawbox=x=0:y=ih*{y}:w=iw:h={h_expr}:color=black:t=fill")
                 # Neo giữa chữ vào giữa dải đen (\an5\pos) để 1 hay 2 dòng đều nằm gọn trong dải.
                 # ffmpeg 7 xóa thẻ {\...} khi đọc SRT -> đổi sang ASS (PlayRes 384 x 288) rồi chèn thẻ vào ASS.
                 tag = f"{{\\an5\\pos(192,{(y + y1) / 2 * 288:.1f})}}"
